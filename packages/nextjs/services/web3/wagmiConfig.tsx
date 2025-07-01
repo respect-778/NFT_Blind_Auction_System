@@ -3,7 +3,7 @@ import { Chain, createClient, http } from "viem";
 import { hardhat } from "viem/chains";
 import { createConfig } from "wagmi";
 import scaffoldConfig from "~~/scaffold.config";
-import { getInfuraHttpUrl } from "~~/utils/scaffold-eth";
+import { getAlchemyHttpUrl } from "~~/utils/scaffold-eth";
 
 const { targetNetworks } = scaffoldConfig;
 
@@ -17,10 +17,10 @@ export const wagmiConfig = createConfig({
   client({ chain }) {
     return createClient({
       chain,
-      // 对于hardhat网络，使用本地URL而不是Infura
+      // 对于hardhat网络，使用本地URL，其他网络使用Alchemy
       transport: chain.id === (hardhat as Chain).id
         ? http("http://127.0.0.1:8545")
-        : http(getInfuraHttpUrl(chain.id)),
+        : http(getAlchemyHttpUrl(chain.id)),
       ...(chain.id !== (hardhat as Chain).id
         ? {
           pollingInterval: scaffoldConfig.pollingInterval,

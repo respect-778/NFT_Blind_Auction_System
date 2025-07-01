@@ -52,8 +52,22 @@ export const getInfuraHttpUrl = (chainId: number) => {
 
 // 修改原来的getAlchemyHttpUrl函数为备用
 export const getAlchemyHttpUrl = (chainId: number) => {
-  // 优先使用Infura
-  return getInfuraHttpUrl(chainId);
+  // 对于hardhat本地网络，直接返回本地URL
+  if (chainId === chains.hardhat.id) {
+    return "http://127.0.0.1:8545";
+  }
+
+  const networkName = RPC_CHAIN_NAMES[chainId];
+  if (!networkName) return undefined;
+
+  // 使用Alchemy API
+  return `https://${networkName}.g.alchemy.com/v2/${scaffoldConfig.alchemyApiKey}`;
+};
+
+// 修改为使用Alchemy作为主要RPC提供商
+export const getHttpRpcUrl = (chainId: number) => {
+  // 优先使用Alchemy
+  return getAlchemyHttpUrl(chainId);
 };
 
 export const NETWORKS_EXTRA_DATA: Record<string, ChainAttributes> = {

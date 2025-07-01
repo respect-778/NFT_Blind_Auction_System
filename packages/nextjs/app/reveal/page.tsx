@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAccount, usePublicClient, useWalletClient } from 'wagmi';
@@ -26,7 +26,7 @@ interface BidInfo {
   auctionAddress?: string;
 }
 
-export default function RevealPage() {
+function RevealContent() {
   const searchParams = useSearchParams();
   const { address: connectedAddress } = useAccount();
   const [bids, setBids] = useState<BidInfo[]>([]);
@@ -664,68 +664,14 @@ export default function RevealPage() {
   );
 }
 
-{/* 添加一些自定义CSS */ }
-<style jsx global>{`
-  .glow-text {
-    text-shadow: 0 0 10px rgba(66, 153, 225, 0.5), 0 0 20px rgba(66, 153, 225, 0.3);
-  }
-  
-  @keyframes pulse-border {
-    0%, 100% { border-color: rgba(102, 0, 255, 0.3); }
-    50% { border-color: rgba(102, 0, 255, 0.6); }
-  }
-  
-  .neon-text {
-    text-shadow: 0 0 5px rgba(102, 0, 255, 0.8), 0 0 20px rgba(102, 0, 255, 0.5);
-  }
-
-  @keyframes fadeIn {
-    from { 
-      opacity: 0; 
-      transform: translateY(10px) scale(0.95); 
-    }
-    to { 
-      opacity: 1; 
-      transform: translateY(0) scale(1); 
-    }
-  }
-  
-  .animate-fadeIn {
-    animation: fadeIn 0.5s ease-out forwards;
-  }
-
-  @keyframes gradientShift {
-    0%, 100% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-  }
-
-  .animate-gradient {
-    background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
-    background-size: 400% 400%;
-    animation: gradientShift 4s ease infinite;
-  }
-
-  .group:hover .group-hover\\:scale-110 {
-    transform: scale(1.1);
-  }
-
-  .group:hover .group-hover\\:rotate-3 {
-    transform: rotate(3deg);
-  }
-
-  @keyframes float {
-    0%, 100% { transform: translateY(0px); }
-    50% { transform: translateY(-10px); }
-  }
-
-  .animate-float {
-    animation: float 3s ease-in-out infinite;
-  }
-
-  .border-gradient {
-    border: 2px solid transparent;
-    background: linear-gradient(45deg, rgba(59, 130, 246, 0.3), rgba(147, 51, 234, 0.3)) border-box;
-    mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
-    mask-composite: exclude;
-  }
-`}</style> 
+export default function RevealPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500"></div>
+      </div>
+    }>
+      <RevealContent />
+    </Suspense>
+  );
+} 

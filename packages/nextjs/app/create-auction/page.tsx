@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAccount, useWriteContract, usePublicClient } from "wagmi";
 import { SparklesIcon, PlusCircleIcon, ClockIcon } from "@heroicons/react/24/outline";
@@ -19,7 +19,7 @@ type UserNFT = {
   minPrice: string;
 };
 
-export default function CreateAuction() {
+function CreateAuctionContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { address, isConnected } = useAccount();
@@ -553,5 +553,17 @@ export default function CreateAuction() {
         }
       `}</style>
     </>
+  );
+}
+
+export default function CreateAuction() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500"></div>
+      </div>
+    }>
+      <CreateAuctionContent />
+    </Suspense>
   );
 } 

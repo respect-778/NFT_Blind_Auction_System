@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { ethers } from 'ethers';
 import { useAccount, usePublicClient } from 'wagmi';
@@ -44,7 +44,7 @@ const formatTime = (timestamp: any) => {
   }
 };
 
-export default function ResultsPage() {
+function ResultsContent() {
   const searchParams = useSearchParams();
   const { address } = useAccount();
   const [phase, setPhase] = useState<number>(0);
@@ -968,30 +968,14 @@ export default function ResultsPage() {
   );
 }
 
-{/* 添加自定义CSS动画 */ }
-<style jsx global>{`
-  @keyframes spin-reverse {
-    from {
-      transform: rotate(360deg);
-    }
-    to {
-      transform: rotate(0deg);
-    }
-  }
-  
-  .animate-spin-reverse {
-    animation: spin-reverse 1s linear infinite;
-  }
-  
-  .animate-bounce {
-    animation: bounce 1s infinite;
-  }
-  
-  .delay-100 {
-    animation-delay: 0.1s;
-  }
-  
-  .delay-200 {
-    animation-delay: 0.2s;
-  }
-`}</style> 
+export default function ResultsPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500"></div>
+      </div>
+    }>
+      <ResultsContent />
+    </Suspense>
+  );
+} 
