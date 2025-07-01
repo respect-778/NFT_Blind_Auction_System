@@ -35,6 +35,11 @@ export const RPC_CHAIN_NAMES: Record<number, string> = {
 
 // 添加Infura HTTP URL生成函数
 export const getInfuraHttpUrl = (chainId: number) => {
+  // 对于hardhat本地网络，直接返回本地URL
+  if (chainId === chains.hardhat.id) {
+    return "http://127.0.0.1:8545";
+  }
+
   // 对于Infura，sepolia直接使用sepolia作为网络名
   if (chainId === chains.sepolia.id) {
     return `https://sepolia.infura.io/v3/${scaffoldConfig.infuraApiKey}`;

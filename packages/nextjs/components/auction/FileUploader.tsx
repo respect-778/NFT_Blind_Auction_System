@@ -11,6 +11,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({ onUploadComplete }) 
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // 使用NFT.Storage上传到IPFS
   const uploadToIPFS = async (file: File) => {
@@ -20,43 +21,69 @@ export const FileUploader: React.FC<FileUploaderProps> = ({ onUploadComplete }) 
     setUploadProgress(10);
 
     try {
-      // 创建FormData对象
       const formData = new FormData();
       formData.append("file", file);
 
-      // 使用web3.storage或者nft.storage的API
-      // 这里简化为使用第三方免费的上传服务
+      // 添加元数据
+      const metadata = JSON.stringify({
+        name: file.name,
+        keyvalues: {
+          uploadedAt: new Date().toISOString(),
+          fileType: file.type,
+          fileSize: file.size.toString()
+        }
+      });
+      formData.append('pinataMetadata', metadata);
+
+      // 添加选项
+      const options = JSON.stringify({
+        cidVersion: 0,
+      });
+      formData.append('pinataOptions', options);
+
+      // 使用JWT认证方式（推荐）
+      const JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiI0ZWM0MzA2Ni01ZTYxLTQ3NTUtYmJmMy1jZjQxYmZlMmNkNDUiLCJlbWFpbCI6Imx4eTI4NjFAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsInBpbl9wb2xpY3kiOnsicmVnaW9ucyI6W3siZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiRlJBMSJ9LHsiZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiTllDMSJ9XSwidmVyc2lvbiI6MX0sIm1mYV9lbmFibGVkIjpmYWxzZSwic3RhdHVzIjoiQUNUSVZFIn0sImF1dGhlbnRpY2F0aW9uVHlwZSI6InNjb3BlZEtleSIsInNjb3BlZEtleUtleSI6ImU4MWIyNzNlODgzMGM0MzRhOGZjIiwic2NvcGVkS2V5U2VjcmV0IjoiZGE2N2MzYzFjYjkyYzE0OTJiMTI2MDc5ZTBiMjYzNGJlNzQxODkzNWVkYjI3MmVlM2MxNDFjNmZlOGMyOGQ0OCIsImV4cCI6MTc4MjQ1MjQzMH0.5rOuZORDFGuscw4wOJnyJKGZsQeyxUWLzbRTnGQR-ik";
+
       const response = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
         method: "POST",
         headers: {
-          // 使用公共测试密钥，实际使用中应该替换为你自己的密钥
-          pinata_api_key: `2f7a88df9d47b0c4d59e`,
-          pinata_secret_api_key: `6c45c0a2f173e0971481a0ddc036c180808a50212fbcfabd0863ec16c79dc658`,
+          'Authorization': `Bearer ${JWT}`,
         },
         body: formData,
       });
 
-      setUploadProgress(70);
+      if (!response.ok) {
+        // 如果JWT失败，回退到API Key方式
+        console.log("JWT认证失败，尝试使用API Key...");
+        const fallbackResponse = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+          method: "POST",
+          headers: {
+            pinata_api_key: `e81b273e8830c434a8fc`,
+            pinata_secret_api_key: `da67c3c1cb92c1492b126079e0b2634be7418935edb272ee3c141c6fe8c28d48`,
+          },
+          body: formData,
+        });
 
-      // 处理响应
-      if (response.ok) {
-        const data = await response.json();
-        // 获取CID
-        const cid = data.IpfsHash;
-        setUploadProgress(100);
-        onUploadComplete(cid);
-        notification.success("文件上传成功！");
-      } else {
-        throw new Error("上传失败");
+        if (!fallbackResponse.ok) {
+          const errorText = await fallbackResponse.text();
+          console.error("IPFS上传失败:", errorText);
+          throw new Error(`IPFS上传失败: ${fallbackResponse.status}`);
+        }
+
+        const fallbackResult = await fallbackResponse.json();
+        console.log("IPFS上传成功 (API Key):", fallbackResult);
+        onUploadComplete(fallbackResult.IpfsHash);
+        return;
       }
+
+      const result = await response.json();
+      console.log("IPFS上传成功 (JWT):", result);
+      onUploadComplete(result.IpfsHash);
     } catch (error) {
-      console.error("IPFS上传错误:", error);
-      notification.error("文件上传失败，请重试。");
-      // 回退到模拟上传方式（仅用于开发和演示）
-      simulateUpload(file);
+      console.error("上传失败:", error);
+      setError("文件上传失败，请重试");
     } finally {
       setIsUploading(false);
-      setUploadProgress(0);
     }
   };
 

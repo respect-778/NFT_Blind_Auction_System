@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.4;
 
+import "./AuctionNFT.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+
+/// @title 工厂合约接口
+interface IBlindAuctionFactory {
+    function notifyAuctionEnded(uint256 nftTokenId, address winner) external;
+}
+
 /// @title 盲拍（Blind Auction）智能合约
-/// @notice 该合约允许用户进行匿名竞标，之后再披露出价，保障竞标的公平性    
-contract BlindAuction {
+/// @notice 该合约允许用户进行匿名竞标，之后再披露出价，保障竞标的公平性，支持NFT自动转移    
+contract BlindAuction is IERC721Receiver {
     // 结构体：表示一个盲拍出价，包含加密后的出价和押金
     struct Bid {
         bytes32 blindedBid; // 使用 keccak256(value, fake, secret) 生成的哈希值
@@ -24,12 +32,20 @@ contract BlindAuction {
     // 可取回的竞标押金（如果不是最高出价）
     mapping(address => uint) pendingReturns;
 
+    // NFT相关
+    uint256 public nftTokenId;    // 关联的NFT ID（0表示传统拍卖）
+    AuctionNFT public nftContract; // NFT合约引用
+    bool public isNFTAuction;     // 是否为NFT拍卖
+    address public factory;       // 工厂合约地址，用于权限控制
+
     // 拍卖结束事件
-    event AuctionEnded(address winner, uint highestBid);
+    event AuctionEnded(address winner, uint highestBid, uint256 nftTokenId);
     // 增加竞标事件便于前端监听
     event BidSubmitted(address bidder, uint deposit);
     // 披露竞标结果事件
     event BidRevealed(address bidder, uint value, bool success);
+    // NFT转移事件
+    event NFTTransferred(uint256 indexed tokenId, address indexed from, address indexed to);
 
     // 自定义错误信息（gas 优化方式）
     error TooEarly(uint time);             // 函数调用过早
@@ -48,21 +64,33 @@ contract BlindAuction {
         _;
     }
 
-    /// 构造函数，初始化受益人、竞标开始时间和各阶段时长
+    /// 构造函数，初始化受益人、竞标开始时间和各阶段时长，支持NFT
     /// @param startTime 竞标开始时间（时间戳）
     /// @param biddingTime 竞标阶段的持续时间（秒）
     /// @param revealTime 披露阶段的持续时间（秒）
     /// @param beneficiaryAddress 受益人地址
+    /// @param _nftTokenId NFT ID（0表示传统拍卖）
+    /// @param _nftContract NFT合约地址
     constructor(
         uint startTime,
         uint biddingTime,
         uint revealTime,
-        address payable beneficiaryAddress
+        address payable beneficiaryAddress,
+        uint256 _nftTokenId,
+        address _nftContract
     ) {
         beneficiary = beneficiaryAddress;
         biddingStart = startTime;
         biddingEnd = startTime + biddingTime;
         revealEnd = biddingEnd + revealTime;
+        factory = msg.sender; // 设置工厂合约地址
+        
+        nftTokenId = _nftTokenId;
+        isNFTAuction = _nftTokenId > 0;
+        
+        if (isNFTAuction) {
+            nftContract = AuctionNFT(_nftContract);
+        }
     }
 
     /// 用户提交盲拍（加密的出价）
@@ -135,9 +163,10 @@ contract BlindAuction {
             bidToCheck.blindedBid = bytes32(0);
         }
 
-        // 将应退还金额返还给用户
+        // 修改：将应退还金额加入到pendingReturns而不是立即退还
+        // 这样所有押金都会在拍卖结束后统一通过withdraw()函数领取
         if (refund > 0) {
-            payable(msg.sender).transfer(refund);
+            pendingReturns[msg.sender] += refund;
         }
     }
 
@@ -151,18 +180,38 @@ contract BlindAuction {
         }
     }
 
-    /// 结束拍卖：只能调用一次，将最高出价金额转给受益人
+    /// 结束拍卖：只能调用一次，将最高出价金额转给受益人，自动转移NFT
     function auctionEnd()
         external
         onlyAfter(revealEnd) // 只能在披露阶段后调用
     {
         if (ended) revert AuctionEndAlreadyCalled();
 
-        emit AuctionEnded(highestBidder, highestBid); // 触发拍卖结束事件
+        emit AuctionEnded(highestBidder, highestBid, nftTokenId); // 触发拍卖结束事件
 
         ended = true;
 
-        beneficiary.transfer(highestBid); // 转账给受益人
+        // 如果是NFT拍卖且有最高出价者，转移NFT
+        if (isNFTAuction && highestBidder != address(0)) {
+            // 将NFT转移给最高出价者
+            nftContract.transferFrom(address(this), highestBidder, nftTokenId);
+            emit NFTTransferred(nftTokenId, address(this), highestBidder);
+            
+            // 通知工厂合约更新NFT状态
+            IBlindAuctionFactory(factory).notifyAuctionEnded(nftTokenId, highestBidder);
+        } else if (isNFTAuction) {
+            // 如果没有有效出价，NFT退回给创建者
+            nftContract.transferFrom(address(this), beneficiary, nftTokenId);
+            emit NFTTransferred(nftTokenId, address(this), beneficiary);
+            
+            // 通知工厂合约更新NFT状态
+            IBlindAuctionFactory(factory).notifyAuctionEnded(nftTokenId, beneficiary);
+        }
+
+        // 转账给受益人
+        if (highestBid > 0) {
+            beneficiary.transfer(highestBid);
+        }
     }
 
     /// 内部函数：尝试设置新的最高出价
@@ -217,5 +266,43 @@ contract BlindAuction {
         if (block.timestamp < biddingEnd) return 1;   // 竞标阶段
         if (block.timestamp < revealEnd) return 2;    // 披露阶段
         return 3; // 拍卖结束
+    }
+    
+    /// 获取NFT相关信息
+    /// @return isNFT 是否为NFT拍卖
+    /// @return tokenId NFT ID
+    /// @return nftOwner NFT当前所有者
+    function getNFTInfo() public view returns (bool isNFT, uint256 tokenId, address nftOwner) {
+        isNFT = isNFTAuction;
+        tokenId = nftTokenId;
+        if (isNFTAuction) {
+            try nftContract.ownerOf(nftTokenId) returns (address owner) {
+                nftOwner = owner;
+            } catch {
+                nftOwner = address(0);
+            }
+        } else {
+            nftOwner = address(0);
+        }
+    }
+    
+    /// 设置NFT Token ID（仅限工厂合约调用）
+    /// @param _nftTokenId 新的NFT Token ID
+    function setNFTTokenId(uint256 _nftTokenId) external {
+        require(msg.sender == factory, "Only factory can set NFT token ID");
+        nftTokenId = _nftTokenId;
+        isNFTAuction = _nftTokenId > 0;
+    }
+    
+    /// 实现IERC721Receiver接口，使合约能够接收NFT
+    /// @return bytes4 选择器，表示接收成功
+    function onERC721Received(
+        address /* operator */,
+        address /* from */,
+        uint256 /* tokenId */,
+        bytes calldata /* data */
+    ) external pure override returns (bytes4) {
+        // 返回正确的选择器表示接收成功
+        return IERC721Receiver.onERC721Received.selector;
     }
 } 

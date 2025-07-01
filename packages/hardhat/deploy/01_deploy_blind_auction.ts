@@ -2,44 +2,42 @@ import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 
 /**
- * 部署名为"BlindAuction"的合约, 使用部署者账户作为受益人
- * 
- * 注意: 这是一个初始的盲拍合约实例，仅用于演示
- * 用户可以通过BlindAuctionFactory创建自己的拍卖
+ * 部署名为"BlindAuction"的合约，使用部署者账户和
+ * 构造函数参数设置为开始时间、竞标时间、披露时间、受益人地址和NFT参数
+ *
+ * @param hre HardhatRuntimeEnvironment对象
  */
 const deployBlindAuction: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   const { deployer } = await hre.getNamedAccounts();
   const { deploy } = hre.deployments;
 
-  // 开始时间: 当前时间 (用于测试)
+  // 开始时间：当前时间（用于测试）
   const startTime = Math.floor(Date.now() / 1000); // 当前时间戳
 
-  // 竞标时间: 30分钟 (用于测试，实际部署可调整为更长时间)
-  const biddingTime = 30 * 60; // 30分钟 (秒数)
+  // 竞标时间：30分钟（用于测试，实际部署可调整为更长时间）
+  const biddingTime = 30 * 60; // 30分钟（秒数）
 
-  // 披露时间: 15分钟 (用于测试，实际部署可调整为更长时间)
-  const revealTime = 15 * 60; // 15分钟 (秒数)
+  // 披露时间：15分钟（用于测试，实际部署可调整为更长时间）
+  const revealTime = 15 * 60; // 15分钟（秒数）
 
-  // 受益人 (拍卖结束后接收最高出价的地址)
+  // 受益人地址（这里设置为部署者地址）
   const beneficiaryAddress = deployer;
+
+  // NFT参数（传统拍卖）
+  const nftTokenId = 0; // 0表示传统拍卖
+  const nftContract = "0x0000000000000000000000000000000000000000"; // 零地址
 
   await deploy("BlindAuction", {
     from: deployer,
-    args: [startTime, biddingTime, revealTime, beneficiaryAddress],
+    // 合约构造函数参数
+    args: [startTime, biddingTime, revealTime, beneficiaryAddress, nftTokenId, nftContract],
     log: true,
+    // autoMine: 可以传递给deploy函数，以使部署过程在本地网络上更快
+    // 通过自动挖掘合约部署交易。对线上网络没有影响。
     autoMine: true,
   });
-
-  console.log("✅ BlindAuction 示例合约部署完成！");
-  console.log(`   - 开始时间: ${new Date(startTime * 1000).toLocaleString()}`);
-  console.log(`   - 竞标时长: ${biddingTime} 秒 (${biddingTime / 60} 分钟)`);
-  console.log(`   - 披露时长: ${revealTime} 秒 (${revealTime / 60} 分钟)`);
-  console.log(`   - 受益人地址: ${beneficiaryAddress}`);
-  console.log();
-  console.log("注意: 这是一个演示用的盲拍合约。用户可以通过BlindAuctionFactory创建自己的拍卖。");
 };
 
 export default deployBlindAuction;
 
-// 设置标签
-deployBlindAuction.tags = ["BlindAuction", "Demo"]; 
+deployBlindAuction.tags = ["BlindAuction"]; 

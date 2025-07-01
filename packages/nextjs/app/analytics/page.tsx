@@ -36,18 +36,14 @@ const AnimatedNumber = ({ value, duration = 2000, suffix = '' }: { value: number
   const [displayValue, setDisplayValue] = useState(0);
 
   useEffect(() => {
-    console.log('🔢 AnimatedNumber 接收:', { value, suffix, type: typeof value });
-
     // 如果值为0、null、undefined或NaN，直接设置为0
     if (!value || isNaN(value) || value === 0) {
-      console.log('❌ 值无效，设置为0');
       setDisplayValue(0);
       return;
     }
 
-    // 立即设置最终值，先不要动画效果
+    // 立即设置最终值
     setDisplayValue(value);
-    console.log('✅ 设置显示值:', value);
 
     // 后续可以恢复动画效果
     // let startTime: number;
@@ -82,8 +78,12 @@ const AnimatedNumber = ({ value, duration = 2000, suffix = '' }: { value: number
     return 0;
   };
 
+  // 特殊处理：平均成交价为0时显示"暂无成交"
+  if (suffix === ' ETH' && displayValue === 0) {
+    return <span className="text-slate-400 text-xl">暂无成交</span>;
+  }
+
   const formattedValue = displayValue.toFixed(getDecimalPlaces());
-  console.log('📺 AnimatedNumber 最终显示:', formattedValue + suffix);
 
   return <span>{formattedValue}{suffix}</span>;
 };
@@ -96,7 +96,8 @@ const StatsCard = ({
   icon,
   gradient,
   textColor,
-  delay = 0
+  delay = 0,
+  isEthValue = false
 }: {
   title: string;
   value: number;
@@ -105,6 +106,7 @@ const StatsCard = ({
   gradient: string;
   textColor: string;
   delay?: number;
+  isEthValue?: boolean;
 }) => {
   const [isVisible, setIsVisible] = useState(false);
 
@@ -131,7 +133,15 @@ const StatsCard = ({
             <p className="text-slate-400 text-sm font-medium">{title}</p>
             <p className={`text-3xl font-bold ${textColor} mt-1`}>
               {/* 为ETH相关的数值添加特殊处理 */}
-              {title.includes('ETH') ? (
+              {isEthValue ? (
+                <>
+                  <AnimatedNumber
+                    key={`${title}-${value}`}
+                    value={value}
+                    suffix=" ETH"
+                  />
+                </>
+              ) : title.includes('ETH') ? (
                 <>
                   <AnimatedNumber
                     key={`${title}-${value}`}
@@ -169,16 +179,6 @@ const StatsCard = ({
 
 export default function AnalyticsPage() {
   const { data: analyticsData, loading, error, refresh } = useAuctionAnalytics();
-
-  // 添加前端数据接收调试
-  useEffect(() => {
-    console.log('🎨 前端接收到数据:', {
-      totalVolume: analyticsData.totalVolume,
-      averagePrice: analyticsData.averagePrice,
-      successfulAuctions: analyticsData.successfulAuctions,
-      loading
-    });
-  }, [analyticsData, loading]);
 
   // 强制重新渲染机制
   const [renderKey, setRenderKey] = useState(0);
@@ -470,31 +470,28 @@ export default function AnalyticsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#020033] via-[#030045] to-[#020033] relative overflow-hidden">
-      {/* 动态背景效果 */}
-      <div className="absolute inset-0">
-        {/* 星光效果 */}
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(120,119,198,0.1),transparent_50%)]"></div>
-
-        {/* 流动光效 */}
-        <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-cyan-500/50 to-transparent animate-pulse"></div>
-        <div className="absolute bottom-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-purple-500/50 to-transparent animate-pulse"></div>
-
-        {/* 网格纹理 */}
-        <div className="absolute inset-0 bg-[linear-gradient(rgba(6,0,81,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(6,0,81,0.03)_1px,transparent_1px)] bg-[size:100px_100px]"></div>
+    <div className="min-h-screen bg-gradient-to-b from-[#020033] via-[#030045] to-[#020033] text-white">
+      {/* 背景装饰 */}
+      <div className="absolute inset-0 bg-[linear-gradient(rgba(102,0,255,0.05)_1.5px,transparent_1.5px),linear-gradient(90deg,rgba(102,0,255,0.05)_1.5px,transparent_1.5px)] bg-[size:30px_30px] pointer-events-none"></div>
+      <div className="absolute inset-0 opacity-20 pointer-events-none">
+        <div className="absolute top-0 -left-40 w-96 h-96 bg-blue-700 rounded-full filter blur-[120px] animate-pulse"></div>
+        <div className="absolute bottom-0 -right-40 w-96 h-96 bg-purple-700 rounded-full filter blur-[120px] animate-pulse delay-1000"></div>
       </div>
 
-      <div className="relative z-10 container mx-auto px-4 py-12">
-        {/* 页面标题 - 增强版 */}
-        <div className="text-center mb-16">
-          <div className="relative inline-block">
-            <h1 className="text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-purple-400 to-cyan-400 mb-4">
-              📊 拍卖数据分析仪表板
-            </h1>
-            <div className="absolute -inset-1 bg-gradient-to-r from-blue-600/20 via-purple-600/20 to-cyan-600/20 blur-xl rounded-lg"></div>
+      <div className="relative z-10 w-full px-4 py-12">
+        {/* 页面标题 */}
+        <div className="text-center mb-12">
+          <h1 className="text-5xl md:text-6xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-purple-400 to-cyan-400 mb-4 neon-text">
+            拍卖数据分析仪表板
+          </h1>
+          <div className="mt-6 flex justify-center">
+            <div className="h-1 w-32 bg-gradient-to-r from-blue-500 via-purple-500 to-cyan-500 rounded-full relative">
+              <div className="absolute inset-0 bg-gradient-to-r from-blue-400 to-cyan-400 rounded-full blur-sm"></div>
+            </div>
           </div>
-          <p className="text-slate-300 text-lg mt-4">深入了解平台拍卖数据和用户行为</p>
-          <div className="w-24 h-1 bg-gradient-to-r from-blue-500 to-purple-500 mx-auto mt-4 rounded-full"></div>
+          <p className="text-xl text-slate-300 mb-6 mt-6">
+            深入了解平台拍卖数据和用户行为
+          </p>
         </div>
 
         {/* 主要统计卡片 - 炫酷版本 */}
@@ -507,49 +504,30 @@ export default function AnalyticsPage() {
             gradient="bg-gradient-to-r from-blue-600 to-blue-400"
             textColor="text-blue-400"
             delay={0}
+            isEthValue={false}
           />
 
-          {/* 直接显示字符串，不使用StatsCard */}
-          <div className="relative group transform transition-all duration-700 hover:scale-105">
-            <div className="absolute -inset-0.5 bg-gradient-to-r from-green-600 to-emerald-400 rounded-xl blur opacity-30 group-hover:opacity-50 transition duration-1000 group-hover:duration-200"></div>
-            <div className="relative bg-slate-900/80 backdrop-blur-xl rounded-xl p-6 border border-slate-700/50 hover:border-slate-600 transition-all duration-300">
-              <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent"></div>
-              <div className="flex items-center justify-between">
-                <div className="flex-1">
-                  <p className="text-slate-400 text-sm font-medium">总成交金额</p>
-                  <p className="text-3xl font-bold text-green-400 mt-1">
-                    {analyticsData.totalVolume} ETH
-                  </p>
-                  <p className="text-xs text-slate-500 mt-2 leading-relaxed">
-                    {analyticsData.successfulAuctions} 笔成功交易
-                  </p>
-                </div>
-                <div className="text-4xl opacity-80 group-hover:scale-110 transition-transform duration-300">💰</div>
-              </div>
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-green-600 to-emerald-400 opacity-20"></div>
-            </div>
-          </div>
+          <StatsCard
+            title="总成交金额"
+            value={parseFloat(analyticsData.totalVolume) || 0}
+            subtitle={`${analyticsData.successfulAuctions} 笔成功交易`}
+            icon="💰"
+            gradient="bg-gradient-to-r from-green-600 to-emerald-400"
+            textColor="text-green-400"
+            delay={200}
+            isEthValue={true}
+          />
 
-          {/* 直接显示字符串，不使用StatsCard */}
-          <div className="relative group transform transition-all duration-700 hover:scale-105">
-            <div className="absolute -inset-0.5 bg-gradient-to-r from-purple-600 to-purple-400 rounded-xl blur opacity-30 group-hover:opacity-50 transition duration-1000 group-hover:duration-200"></div>
-            <div className="relative bg-slate-900/80 backdrop-blur-xl rounded-xl p-6 border border-slate-700/50 hover:border-slate-600 transition-all duration-300">
-              <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent"></div>
-              <div className="flex items-center justify-between">
-                <div className="flex-1">
-                  <p className="text-slate-400 text-sm font-medium">平均成交价</p>
-                  <p className="text-3xl font-bold text-purple-400 mt-1">
-                    {analyticsData.averagePrice} ETH
-                  </p>
-                  <p className="text-xs text-slate-500 mt-2 leading-relaxed">
-                    成功率 {analyticsData.successRate.toFixed(1)}%
-                  </p>
-                </div>
-                <div className="text-4xl opacity-80 group-hover:scale-110 transition-transform duration-300">📈</div>
-              </div>
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-purple-600 to-purple-400 opacity-20"></div>
-            </div>
-          </div>
+          <StatsCard
+            title="平均成交价"
+            value={parseFloat(analyticsData.averagePrice) || 0}
+            subtitle={`成功率 ${analyticsData.successRate.toFixed(1)}%`}
+            icon="📈"
+            gradient="bg-gradient-to-r from-purple-600 to-purple-400"
+            textColor="text-purple-400"
+            delay={400}
+            isEthValue={true}
+          />
 
           <StatsCard
             title="参与用户数"
@@ -559,6 +537,7 @@ export default function AnalyticsPage() {
             gradient="bg-gradient-to-r from-cyan-600 to-cyan-400"
             textColor="text-cyan-400"
             delay={600}
+            isEthValue={false}
           />
         </div>
 
@@ -783,30 +762,6 @@ export default function AnalyticsPage() {
                 {analyticsData.monthlyGrowth > 10 ? '增长强劲' : analyticsData.monthlyGrowth > 0 ? '稳定增长' : '需要关注'}。
               </p>
             </div>
-          </div>
-        </div>
-
-        {/* 刷新按钮 - 炫酷版 */}
-        <div className="text-center mt-12">
-          <div className="relative inline-block group">
-            <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl blur opacity-50 group-hover:opacity-75 transition duration-1000"></div>
-            <button
-              onClick={refresh}
-              className="relative btn btn-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white border-0 shadow-xl px-8 py-4"
-              disabled={loading}
-            >
-              {loading ? (
-                <>
-                  <span className="loading loading-spinner loading-sm mr-2"></span>
-                  更新中...
-                </>
-              ) : (
-                <>
-                  <span className="text-xl mr-2">🔄</span>
-                  刷新数据
-                </>
-              )}
-            </button>
           </div>
         </div>
       </div>

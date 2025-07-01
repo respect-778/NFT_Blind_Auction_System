@@ -2,37 +2,41 @@ import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 
 /**
- * 部署BlindAuctionFactory合约
+ * 部署BlindAuctionFactory合约，并设置NFT合约连接
+ *
+ * @param hre HardhatRuntimeEnvironment对象。
  */
-const deployBlindAuctionFactory: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
+const deployFactory: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   const { deployer } = await hre.getNamedAccounts();
   const { deploy } = hre.deployments;
 
+  // 获取已部署的NFT合约地址
+  const auctionNFTDeployment = await hre.deployments.get("AuctionNFT");
+  const nftContractAddress = auctionNFTDeployment.address;
+
   await deploy("BlindAuctionFactory", {
     from: deployer,
-    args: [],
+    args: [nftContractAddress], // 传入NFT合约地址
     log: true,
     autoMine: true,
   });
 
-  // 获取部署的合约
-  const blindAuctionFactory = await hre.ethers.getContract("BlindAuctionFactory", deployer);
+  // 获取部署的合约实例
+  const factory = await hre.ethers.getContract("BlindAuctionFactory", deployer);
+  const nftContract = await hre.ethers.getContract("AuctionNFT", deployer);
 
-  // 验证部署是否成功
-  try {
-    // 使用await确保我们获取到结果，使用类型断言确保TypeScript识别返回类型
-    const auctionCount = await (blindAuctionFactory as any).getAuctionCount();
-    console.log(`当前工厂中的拍卖数量: ${auctionCount}`);
-  } catch (error) {
-    console.error("获取拍卖数量失败:", error);
-    console.log("合约已部署，但无法验证拍卖数量");
-  }
+  // 设置NFT合约的工厂地址
+  console.log("⚙️ 设置NFT合约的工厂地址...");
+  const setFactoryTx = await (nftContract as any).setFactoryContract(await (factory as any).getAddress());
+  await setFactoryTx.wait();
 
-  console.log("✅ BlindAuctionFactory 合约部署完成！");
+  console.log("👋 BlindAuctionFactory合约部署完成，地址:", await (factory as any).getAddress());
+  console.log("🔗 NFT合约地址:", nftContractAddress);
+  console.log("✅ 合约连接设置完成");
 };
 
-export default deployBlindAuctionFactory;
+export default deployFactory;
 
 // 设置标签和依赖
-deployBlindAuctionFactory.tags = ["BlindAuctionFactory"];
-deployBlindAuctionFactory.dependencies = []; // 如果有依赖的其他合约，可以在这里指定 
+deployFactory.tags = ["BlindAuctionFactory"];
+deployFactory.dependencies = ["AuctionNFT"]; // 确保在NFT合约部署后运行 

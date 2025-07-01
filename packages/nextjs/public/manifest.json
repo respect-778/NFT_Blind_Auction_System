@@ -1,5 +1,5 @@
 {
-  "name": "Scaffold-ETH 2 DApp",
-  "description": "A DApp built with Scaffold-ETH",
-  "iconPath": "logo.svg"
+  "name": "NFT盲拍平台",
+  "description": "去中心化NFT盲拍平台 - 匿名竞拍，公正透明",
+  "iconPath": "favicon.svg"
 }

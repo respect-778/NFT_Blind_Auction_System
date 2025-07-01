@@ -9,9 +9,9 @@ const baseUrl = process.env.VERCEL_URL
   : `http://localhost:${process.env.PORT || 3000}`;
 const imageUrl = `${baseUrl}/thumbnail.jpg`;
 
-const title = "Challenge #1 | SpeedRunEthereum";
-const titleTemplate = "%s | SpeedRunEthereum";
-const description = "Built with 🏗 Scaffold-ETH 2";
+const title = "NFT盲拍平台 | 去中心化艺术品竞拍";
+const titleTemplate = "%s | NFT盲拍平台";
+const description = "基于区块链的去中心化NFT盲拍平台，匿名竞拍，公正透明，打造全新的数字艺术品交易体验";
 
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
@@ -42,7 +42,7 @@ export const metadata: Metadata = {
     description,
   },
   icons: {
-    icon: [{ url: "/favicon.png", sizes: "32x32", type: "image/png" }],
+    icon: [{ url: "/favicon.svg", sizes: "32x32", type: "image/svg+xml" }],
   },
 };
 

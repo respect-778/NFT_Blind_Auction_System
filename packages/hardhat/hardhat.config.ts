@@ -10,7 +10,9 @@ import "@nomicfoundation/hardhat-verify";
 import "hardhat-deploy";
 import "hardhat-deploy-ethers";
 
-// 使用Infura API密钥
+// 使用Alchemy API密钥（主要RPC服务）
+const alchemyApiKey = process.env.ALCHEMY_API_KEY || "i5LOb9tsBpvhiLY25PMsuuLhUsAX62wK";
+// 使用Infura API密钥（备用RPC服务）
 const infuraApiKey = process.env.INFURA_API_KEY || "5fb0b12c6d4b4603b5332fd1bb091a9f";
 // 部署者私钥
 const deployerPrivateKey =
@@ -42,7 +44,8 @@ const config: HardhatUserConfig = {
       },
     ],
   },
-  defaultNetwork: "localhost",
+  // 默认网络设置为Sepolia测试网
+  defaultNetwork: "sepolia",
   namedAccounts: {
     deployer: {
       // By default, it will take the first Hardhat account as the deployer
@@ -52,22 +55,38 @@ const config: HardhatUserConfig = {
   networks: {
     // View the networks that are pre-configured.
     // If the network you are looking for is not here you can add new network settings
+
+    // 本地开发网络
     ganache: {
       url: `http://127.0.0.1:8545`,
       accounts: [deployerPrivateKey],
     },
     hardhat: {
+      // 禁用主网分叉，完全使用本地网络
       forking: {
         url: `https://mainnet.infura.io/v3/${infuraApiKey}`,
-        enabled: process.env.MAINNET_FORKING_ENABLED === "true",
+        enabled: false, // 强制禁用mainnet forking
       },
     },
+    localhost: {
+      url: "http://127.0.0.1:8545",
+    },
+
+    // Sepolia测试网络配置（主要网络）
+    sepolia: {
+      url: `https://eth-sepolia.g.alchemy.com/v2/${alchemyApiKey}`, // 主要使用Alchemy
+      accounts: [deployerPrivateKey],
+      gasPrice: "auto", // 自动Gas价格
+      gas: "auto", // 自动Gas限制
+      chainId: 11155111, // Sepolia链ID
+      // 备用RPC配置
+      // url: `https://sepolia.infura.io/v3/${infuraApiKey}`, // 如需切换到Infura
+    },
+
+    // 其他网络配置（保持注释状态，需要时启用）
+    /*
     mainnet: {
       url: `https://mainnet.infura.io/v3/${infuraApiKey}`,
-      accounts: [deployerPrivateKey],
-    },
-    sepolia: {
-      url: `https://sepolia.infura.io/v3/${infuraApiKey}`,
       accounts: [deployerPrivateKey],
     },
     arbitrum: {
@@ -134,6 +153,7 @@ const config: HardhatUserConfig = {
       url: "https://sepolia.publicgoods.network",
       accounts: [deployerPrivateKey],
     },
+    */
   },
   // configuration for harhdat-verify plugin
   etherscan: {

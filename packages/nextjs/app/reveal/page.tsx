@@ -4,12 +4,15 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAccount, usePublicClient, useWalletClient } from 'wagmi';
-import { ethers } from 'ethers';
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth/useScaffoldReadContract";
 import { useScaffoldWriteContract } from "~~/hooks/scaffold-eth/useScaffoldWriteContract";
 import { notification } from "~~/utils/scaffold-eth";
 import { useDeployedContractInfo } from '~~/hooks/scaffold-eth';
 import { useTargetNetwork } from '~~/hooks/scaffold-eth';
+import MeteorRain from "../../components/MeteorRain";
+import StarryBackground from "../../components/StarryBackground";
+import { MetaHeader } from '~~/components/MetaHeader';
+import { ethers } from 'ethers';
 
 interface BidInfo {
   value: string;
@@ -21,8 +24,6 @@ interface BidInfo {
   revealed?: boolean;
   contractIndex?: number;
   auctionAddress?: string;
-  biddingEnd?: number;  // 竞拍结束时间
-  revealEnd?: number;   // 揭示结束时间
 }
 
 export default function RevealPage() {
@@ -34,750 +35,697 @@ export default function RevealPage() {
   const [timeLeft, setTimeLeft] = useState<string>('');
   const [isClient, setIsClient] = useState(false);
   const [isRevealing, setIsRevealing] = useState(false);
+  const [auctionName, setAuctionName] = useState("未知拍卖");
+  const [revealStartTime, setRevealStartTime] = useState<number>(0);
+  const [revealEndTime, setRevealEndTime] = useState<number>(0);
+  const [revealSuccess, setRevealSuccess] = useState(false);
+  const [revealedCount, setRevealedCount] = useState(0);
+  const [hasRevealed, setHasRevealed] = useState(false);
 
-  // 从URL参数获取预选的出价
-  const preselectedIndex = searchParams.get('index');
-
-  // 从URL参数获取拍卖地址
   const auctionAddress = searchParams.get('address') as `0x${string}` | null;
 
-  // 获取网络和合约信息
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const { data: blindAuctionData } = useDeployedContractInfo("BlindAuction");
+  const { data: factoryContractData } = useDeployedContractInfo("BlindAuctionFactory");
+  const { data: nftContractData } = useDeployedContractInfo("AuctionNFT");
   const { data: walletClient } = useWalletClient();
 
-  // 获取合约状态
   useEffect(() => {
-    const fetchAuctionStatus = async () => {
-      if (!publicClient || !blindAuctionData || !auctionAddress) return;
+    const fetchAuctionInfo = async () => {
+      if (!publicClient || !blindAuctionData || !auctionAddress || !factoryContractData || !nftContractData) return;
 
       try {
-        // 获取竞拍阶段和时间信息
         const [biddingEndResult, revealEndResult, endedResult] = await Promise.all([
-          publicClient.readContract({
-            address: auctionAddress,
-            abi: blindAuctionData.abi,
-            functionName: 'biddingEnd',
-          }),
-          publicClient.readContract({
-            address: auctionAddress,
-            abi: blindAuctionData.abi,
-            functionName: 'revealEnd',
-          }),
-          publicClient.readContract({
-            address: auctionAddress,
-            abi: blindAuctionData.abi,
-            functionName: 'ended',
-          }),
+          publicClient.readContract({ address: auctionAddress, abi: blindAuctionData.abi, functionName: 'biddingEnd' }),
+          publicClient.readContract({ address: auctionAddress, abi: blindAuctionData.abi, functionName: 'revealEnd' }),
+          publicClient.readContract({ address: auctionAddress, abi: blindAuctionData.abi, functionName: 'ended' }),
         ]);
 
-        // 获取区块链当前时间 (以太坊的区块时间)
-        const blockNumber = await publicClient.getBlockNumber();
-        const block = await publicClient.getBlock({ blockNumber });
-        const blockchainTimestamp = block.timestamp;
-
-        // 设置阶段
+        const now = BigInt(Math.floor(Date.now() / 1000));
         const biddingEndTime = BigInt(biddingEndResult.toString());
-        const revealEndTime = BigInt(revealEndResult.toString());
+        const revealEndTimeValue = BigInt(revealEndResult.toString());
         const ended = Boolean(endedResult);
 
-        console.log("区块链时间:", new Date(Number(blockchainTimestamp) * 1000).toLocaleString());
-        console.log("竞拍结束时间:", new Date(Number(biddingEndTime) * 1000).toLocaleString());
-        console.log("揭示结束时间:", new Date(Number(revealEndTime) * 1000).toLocaleString());
+        // 保存揭示阶段的开始和结束时间
+        setRevealStartTime(Number(biddingEndTime));
+        setRevealEndTime(Number(revealEndTimeValue));
 
-        // 根据区块链时间判断当前阶段
         let currentPhase;
-        if (ended || blockchainTimestamp > revealEndTime) {
-          currentPhase = 2; // 已结束
-        } else if (blockchainTimestamp > biddingEndTime) {
-          currentPhase = 1; // 揭示阶段
-        } else {
-          currentPhase = 0; // 竞拍阶段
-        }
-
+        if (ended || now >= revealEndTimeValue) currentPhase = 2; // ended
+        else if (now >= biddingEndTime) currentPhase = 1; // revealing
+        else currentPhase = 0; // bidding
         setPhase(currentPhase);
 
-        // 计算揭示阶段剩余时间
-        if (currentPhase === 1) {
-          const remaining = Number(revealEndTime - blockchainTimestamp);
-          if (remaining <= 0) {
-            setTimeLeft("揭示已结束");
-          } else {
-            const hours = Math.floor(remaining / 3600);
-            const minutes = Math.floor((remaining % 3600) / 60);
-            const seconds = remaining % 60;
-            setTimeLeft(`${hours}小时 ${minutes}分钟 ${seconds}秒`);
+        // 🔧 修复：完善拍卖元数据获取逻辑，与首页和竞拍记录页面保持一致
+        let auctionNameFound = "未命名拍卖";
+
+        try {
+          // 首先尝试检查是否为NFT拍卖
+          const isNFTAuction = await publicClient.readContract({
+            address: auctionAddress,
+            abi: blindAuctionData.abi,
+            functionName: 'isNFTAuction',
+          }) as boolean;
+
+          console.log(`揭示页面拍卖 ${auctionAddress} 是否为NFT拍卖:`, isNFTAuction);
+
+          if (isNFTAuction && nftContractData) {
+            // 获取NFT Token ID和合约地址
+            const [nftTokenId, nftContractAddress] = await Promise.all([
+              publicClient.readContract({
+                address: auctionAddress,
+                abi: blindAuctionData.abi,
+                functionName: 'nftTokenId',
+              }) as Promise<bigint>,
+              publicClient.readContract({
+                address: auctionAddress,
+                abi: blindAuctionData.abi,
+                functionName: 'nftContract',
+              }) as Promise<`0x${string}`>
+            ]);
+
+            console.log(`揭示页面NFT拍卖 - Token ID: ${nftTokenId}, 合约地址: ${nftContractAddress}`);
+
+            if (nftContractAddress && nftTokenId > 0n) {
+              try {
+                // 从NFT合约获取元数据
+                const nftMetadata = await publicClient.readContract({
+                  address: nftContractAddress,
+                  abi: nftContractData.abi,
+                  functionName: 'nftMetadata',
+                  args: [nftTokenId],
+                }) as readonly [string, string, string, bigint, `0x${string}`, boolean, `0x${string}`, bigint];
+
+                const [name] = nftMetadata;
+                auctionNameFound = name || `NFT #${Number(nftTokenId)}`;
+                console.log("从NFT合约获取到揭示页面拍卖名称:", auctionNameFound);
+              } catch (nftError) {
+                console.error("从NFT合约获取揭示页面拍卖元数据失败:", nftError);
+              }
+            }
           }
-        } else if (currentPhase === 0) {
-          setTimeLeft("竞拍阶段尚未结束");
-        } else {
-          setTimeLeft("揭示已结束");
+
+          // 如果从NFT合约获取失败或不是NFT拍卖，尝试从事件日志获取
+          if (auctionNameFound === "未命名拍卖") {
+            console.log("尝试从事件日志获取揭示页面拍卖的元数据...");
+            const logs = await publicClient.getContractEvents({
+              address: factoryContractData.address,
+              abi: factoryContractData.abi,
+              eventName: 'AuctionCreated',
+              args: { auctionAddress: auctionAddress },
+              fromBlock: BigInt(0),
+            });
+
+            if (logs && logs.length > 0 && logs[0].args) {
+              const metadataStr = logs[0].args.metadata as string;
+              if (metadataStr) {
+                try {
+                  const metadata = JSON.parse(metadataStr);
+                  auctionNameFound = metadata.name || "未命名拍卖";
+                  console.log("从事件日志获取到揭示页面拍卖名称:", auctionNameFound);
+                } catch (e) {
+                  console.error("解析揭示页面拍卖元数据字符串失败:", e);
+                }
+              }
+            }
+          }
+
+          setAuctionName(auctionNameFound);
+        } catch (e) {
+          console.error("获取揭示页面拍卖元数据失败:", e);
+          setAuctionName("未命名拍卖");
         }
+
       } catch (error) {
-        console.error("获取拍卖状态失败:", error);
+        console.error("获取揭示页面拍卖状态失败:", error);
       }
     };
 
     if (auctionAddress) {
-      fetchAuctionStatus();
-      const interval = setInterval(fetchAuctionStatus, 10000); // 每10秒更新一次
+      fetchAuctionInfo();
+      const interval = setInterval(fetchAuctionInfo, 10000);
       return () => clearInterval(interval);
     } else {
-      // 如果没有指定拍卖地址，则设置为通用状态
-      setPhase(1); // 假设处于揭示阶段
+      setPhase(1);
       setTimeLeft("未知");
     }
-  }, [publicClient, blindAuctionData, auctionAddress]);
+  }, [publicClient, blindAuctionData, factoryContractData, nftContractData, auctionAddress]);
 
-  // 获取用户的竞拍数量函数
-  const { data: bidCount, refetch: refetchBidCount } = useScaffoldReadContract({
-    contractName: "BlindAuction",
-    functionName: "getBidCount",
-    args: [connectedAddress],
-  });
-
-  // 直接从合约读取用户的出价数量
-  const getBidCountFromContract = async () => {
-    if (!publicClient || !blindAuctionData || !auctionAddress || !connectedAddress) {
-      console.error("无法获取合约数据或地址");
-      return 0;
-    }
-
-    try {
-      const count = await publicClient.readContract({
-        address: auctionAddress,
-        abi: blindAuctionData.abi,
-        functionName: 'getBidCount',
-        args: [connectedAddress],
-      });
-
-      console.log("合约中的出价数量:", count);
-      return Number(count);
-    } catch (error) {
-      console.error("获取出价数量失败:", error);
-      return 0;
-    }
-  };
-
-  // 加载出价记录
   useEffect(() => {
-    setIsClient(true);
-    if (connectedAddress) {
+    if (phase !== 1 || !auctionAddress) return;
+
+    const interval = setInterval(async () => {
       try {
-        const storedBids = localStorage.getItem(`bids_${connectedAddress}`);
-        console.log("从LocalStorage加载的原始出价数据:", storedBids);
+        const now = BigInt(Math.floor(Date.now() / 1000));
+        const remaining = Number(BigInt(revealEndTime) - now);
 
-        if (storedBids) {
-          const parsedBids = JSON.parse(storedBids);
-          console.log("所有解析的出价记录:", parsedBids);
+        if (remaining <= 0) {
+          setTimeLeft("00:00:00");
+          // 如果揭示阶段已结束，自动更新阶段
+          if (now >= BigInt(revealEndTime)) {
+            setPhase(2);
+            setRevealSuccess(true);
+            setRevealedCount(selectedBids.length);
 
-          // 过滤出价记录
-          let filteredBids;
-          if (auctionAddress) {
-            // 如果指定了拍卖地址，只显示该拍卖的出价
-            filteredBids = parsedBids.filter((bid: BidInfo) =>
-              bid.auctionAddress && bid.auctionAddress.toLowerCase() === auctionAddress.toLowerCase()
-            );
-            console.log(`过滤后与拍卖地址 ${auctionAddress} 匹配的出价记录:`, filteredBids);
-
-            // 如果没有找到匹配的出价记录，则显示所有出价
-            if (filteredBids.length === 0) {
-              console.log("未找到匹配的出价记录，显示所有出价");
-              filteredBids = parsedBids;
-            }
-          } else {
-            // 如果未指定拍卖地址，显示所有出价
-            filteredBids = parsedBids;
+            // 提示用户可以查看结果
+            setTimeout(() => {
+              notification.info("您可以前往结果页面查看最新的拍卖状态");
+            }, 2000);
           }
-
-          // 检查已揭示的出价
-          const revealedKey = auctionAddress
-            ? `revealed_bids_${connectedAddress}_${auctionAddress}`
-            : `revealed_bids_${connectedAddress}`;
-          const revealedBids = localStorage.getItem(revealedKey);
-          const revealedIndices = revealedBids ? JSON.parse(revealedBids) : [];
-          console.log("已揭示的出价索引:", revealedIndices);
-
-          // 标记已揭示的出价
-          const updatedBids = filteredBids.map((bid: BidInfo, index: number) => ({
-            ...bid,
-            revealed: revealedIndices.includes(index)
-          }));
-
-          console.log("加载的出价记录:", updatedBids); // 添加调试信息
-          setBids(updatedBids);
-
-          // 如果有预选的出价，则选中它
-          if (preselectedIndex !== null) {
-            const index = parseInt(preselectedIndex);
-            if (!isNaN(index) && index >= 0 && index < filteredBids.length && !revealedIndices.includes(index)) {
-              setSelectedBids([index]);
-            }
-          }
+        } else {
+          const hours = Math.floor(remaining / 3600);
+          const minutes = Math.floor((remaining % 3600) / 60);
+          const seconds = remaining % 60;
+          setTimeLeft(
+            `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+          );
         }
       } catch (error) {
-        console.error("Failed to load bids:", error);
+        // 忽略更新倒计时错误
       }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [phase, auctionAddress, revealEndTime]);
+
+
+  useEffect(() => {
+    setIsClient(true);
+    if (connectedAddress && auctionAddress) {
+      try {
+        const normalizedAddress = connectedAddress.toLowerCase();
+        const storedBids = localStorage.getItem(`bids_${normalizedAddress}`);
+        if (storedBids) {
+          const parsedBids = JSON.parse(storedBids);
+
+          // 严格过滤：只显示当前拍卖地址的出价记录
+          const filteredBids = parsedBids.filter((bid: BidInfo) =>
+            bid.auctionAddress &&
+            bid.auctionAddress.toLowerCase() === auctionAddress.toLowerCase()
+          );
+
+          // 如果用户没有参与当前拍卖，设置空数组
+          if (filteredBids.length === 0) {
+            setBids([]);
+            return;
+          }
+
+          const revealedKey = `revealed_bids_${normalizedAddress}_${auctionAddress}`;
+          const revealedBids = localStorage.getItem(revealedKey);
+          const revealedIndices = revealedBids ? JSON.parse(revealedBids) : [];
+
+          const updatedBids = filteredBids.map((bid: BidInfo, index: number) => ({
+            ...bid,
+            revealed: revealedIndices.includes(index),
+          }));
+
+          setBids(updatedBids);
+
+          // 检查是否已经揭示过出价（用于首次加载时判断是否显示成功界面）
+          const hasRevealedAny = updatedBids.some((bid: BidInfo) => bid.revealed);
+          setHasRevealed(hasRevealedAny);
+
+          // 如果所有出价都已揭示，直接显示成功界面
+          if (updatedBids.length > 0 && updatedBids.every((bid: BidInfo) => bid.revealed)) {
+            setRevealSuccess(true);
+            setRevealedCount(updatedBids.filter((bid: BidInfo) => bid.revealed).length);
+          }
+        } else {
+          setBids([]);
+        }
+      } catch (error) {
+        // 加载出价记录失败，设置空数组
+        setBids([]);
+      }
+    } else {
+      setBids([]);
     }
-  }, [connectedAddress, preselectedIndex, auctionAddress]);
+  }, [connectedAddress, auctionAddress]);
 
-  // 获取合约写入函数
-  // const { writeContractAsync } = useScaffoldWriteContract("BlindAuction");
-
-  // 处理揭示功能
   const handleReveal = async () => {
-    if (!connectedAddress) {
+    if (!connectedAddress || !walletClient) {
       notification.error("请先连接钱包");
       return;
     }
-
     if (!auctionAddress) {
       notification.error("未指定拍卖地址");
       return;
     }
-
     if (selectedBids.length === 0) {
       notification.error("请至少选择一个出价进行揭示");
       return;
     }
-
-    // 确保有钱包客户端和合约数据
-    if (!publicClient || !blindAuctionData || !walletClient) {
-      notification.error("获取合约客户端失败");
+    if (bids.length === 0) {
+      notification.error("您没有参与此拍卖，无法进行揭示操作");
       return;
     }
 
-    // 再次检查当前是否仍在揭示阶段
-    try {
-      // 获取区块链当前时间 (以太坊的区块时间)
-      const blockNumber = await publicClient.getBlockNumber();
-      const block = await publicClient.getBlock({ blockNumber });
-      const blockchainTimestamp = block.timestamp;
+    // 验证选中的出价是否属于当前拍卖
+    const bidsToReveal = selectedBids.map(index => bids[index]);
+    const invalidBids = bidsToReveal.filter(bid =>
+      !bid.auctionAddress ||
+      bid.auctionAddress.toLowerCase() !== auctionAddress.toLowerCase()
+    );
 
-      const [biddingEndTime, revealEndTime, endedStatus] = await Promise.all([
-        publicClient.readContract({
-          address: auctionAddress,
-          abi: blindAuctionData.abi,
-          functionName: 'biddingEnd',
-        }),
-        publicClient.readContract({
-          address: auctionAddress,
-          abi: blindAuctionData.abi,
-          functionName: 'revealEnd',
-        }),
-        publicClient.readContract({
-          address: auctionAddress,
-          abi: blindAuctionData.abi,
-          functionName: 'ended',
-        })
-      ]);
-
-      // 检查合约是否已标记为结束
-      if (endedStatus) {
-        notification.error("拍卖已结束，无法再揭示出价");
-        setPhase(2); // 更新状态为已结束
-        return;
-      }
-
-      // 检查揭示阶段是否已结束
-      if (blockchainTimestamp >= BigInt(revealEndTime.toString())) {
-        notification.error(`揭示阶段已结束，无法再揭示出价。区块链时间: ${new Date(Number(blockchainTimestamp) * 1000).toLocaleString()}, 揭示结束时间: ${new Date(Number(revealEndTime) * 1000).toLocaleString()}`);
-        setPhase(2); // 更新状态为已结束
-        return;
-      }
-
-      // 检查竞拍阶段是否已结束
-      if (blockchainTimestamp < BigInt(biddingEndTime.toString())) {
-        notification.error("竞拍阶段尚未结束，请等待竞拍结束后再进行揭示");
-        setPhase(0);
-        return;
-      }
-
-      // 显示时间信息，帮助用户理解
-      console.log("区块链当前时间:", new Date(Number(blockchainTimestamp) * 1000).toLocaleString());
-      console.log("竞拍结束时间:", new Date(Number(biddingEndTime) * 1000).toLocaleString());
-      console.log("揭示结束时间:", new Date(Number(revealEndTime) * 1000).toLocaleString());
-
-      const timeBeforeEnd = Number(BigInt(revealEndTime.toString()) - blockchainTimestamp);
-      notification.info(`揭示阶段剩余时间: ${Math.floor(timeBeforeEnd / 3600)}小时 ${Math.floor((timeBeforeEnd % 3600) / 60)}分钟 ${timeBeforeEnd % 60}秒`);
-    } catch (error) {
-      console.error("检查揭示状态失败:", error);
-      notification.error("检查揭示状态失败，请稍后再试");
+    if (invalidBids.length > 0) {
+      notification.error("选中的出价不属于当前拍卖，请重新选择");
       return;
     }
 
-    if (phase !== 1) {
-      notification.error(phase === 0 ? "当前仍是竞拍阶段，请等待竞拍结束后再进行揭示" : "揭示阶段已结束");
-      return;
-    }
+    setIsRevealing(true);
+    notification.info("正在准备揭示您的出价...");
 
     try {
-      setIsRevealing(true);
-      // 获取用户在合约中的出价数量
-      // const result = await refetchBidCount();
-      // const currentBidCount = result.data;
+      // 验证并准备参数
+      const values = bidsToReveal.map(bid => {
+        try {
+          // 使用viem库，与出价时保持一致
+          const { parseEther } = require('viem');
+          return parseEther(bid.value);
+        } catch (error) {
+          throw new Error(`出价金额格式错误: ${bid.value}`);
+        }
+      });
 
-      // 使用新的方法直接从指定的合约地址获取出价数量
-      const currentBidCount = await getBidCountFromContract();
+      const fakes = bidsToReveal.map(bid => bid.fake);
 
-      if (currentBidCount === undefined || currentBidCount === 0) {
-        notification.error("无法获取您在合约中的出价数量，或者您在该合约中没有出价记录");
-        setIsRevealing(false);
-        return;
-      }
+      const secrets = bidsToReveal.map(bid => {
+        const secret = bid.secret as string;
 
-      // 准备揭示数据
-      const values: bigint[] = [];
-      const fakes: boolean[] = [];
-      const secrets: `0x${string}`[] = [];
+        // 将原始密钥字符串转换为bytes32格式
+        try {
+          const { keccak256, toBytes } = require('viem');
+          const secretBytes32 = keccak256(toBytes(secret));
+          return secretBytes32 as `0x${string}`;
+        } catch (error) {
+          throw new Error(`密钥处理错误: ${secret}`);
+        }
+      }) as `0x${string}`[];
 
-      // 初始化数组，与合约中存储的出价数量相同
-      // 对于未选中的出价，使用占位符数据
-      for (let i = 0; i < Number(currentBidCount); i++) {
-        values.push(ethers.parseEther("0"));
-        fakes.push(true); // 设为假出价
-        secrets.push(ethers.keccak256(ethers.toUtf8Bytes("dummy")) as `0x${string}`);
-      }
+      // 发送交易并等待确认
+      notification.info("正在发送揭示交易...");
+      const txHash = await walletClient.writeContract({
+        address: auctionAddress,
+        abi: blindAuctionData!.abi,
+        functionName: 'reveal',
+        args: [values, fakes, secrets],
+      });
 
-      // 将选中的出价填入对应位置
-      // 添加更多日志记录，帮助诊断问题
-      console.log("开始处理选中的出价...");
-      console.log("当前用户的合约出价数量:", currentBidCount);
-      console.log("选中的出价索引:", selectedBids);
+      notification.info(`交易已发送，哈希: ${txHash.slice(0, 10)}...`);
 
-      for (const bidIndex of selectedBids) {
-        const bid = bids[bidIndex];
-        console.log(`处理出价 #${bidIndex}:`, {
-          value: bid.value,
-          fake: bid.fake,
-          secret: bid.secret,
-          timestamp: new Date(bid.timestamp).toLocaleString(),
-          storedContractIndex: bid.contractIndex
+      // 等待交易确认
+      if (publicClient) {
+        notification.info("等待交易确认中...");
+        const receipt = await publicClient.waitForTransactionReceipt({
+          hash: txHash,
+          timeout: 60000 // 60秒超时
         });
 
-        // 使用投标时记录的合约索引，如果没有则使用列表索引
-        // 重要：确保contractIndex正确
-        const contractIndex = bid.contractIndex !== undefined && !isNaN(bid.contractIndex)
-          ? bid.contractIndex
-          : bidIndex;
+        if (receipt.status === 'success') {
+          notification.success("揭示交易已成功确认！");
 
-        console.log(`出价 #${bidIndex} 将使用合约索引:`, contractIndex);
+          // 只有在交易成功确认后才更新本地状态
+          const normalizedAddress = connectedAddress.toLowerCase();
+          const revealedKey = `revealed_bids_${normalizedAddress}_${auctionAddress}`;
+          const revealedBids = localStorage.getItem(revealedKey);
+          const revealedIndices = revealedBids ? JSON.parse(revealedBids) : [];
+          const updatedRevealedIndices = [...revealedIndices, ...selectedBids];
+          localStorage.setItem(revealedKey, JSON.stringify(updatedRevealedIndices));
 
-        // 确保索引在有效范围内
-        if (contractIndex >= 0 && contractIndex < Number(currentBidCount)) {
-          // 将出价值转换为ETH单位的BigInt
-          try {
-            const bidValueEth = ethers.parseEther(bid.value);
-            console.log(`出价 #${bidIndex} 的ETH值:`, bidValueEth.toString());
-            values[contractIndex] = bidValueEth;
-          } catch (error) {
-            console.error(`处理出价 #${bidIndex} 的值时出错:`, error);
-            // 使用一个安全的默认值
-            values[contractIndex] = ethers.parseEther("0");
-          }
+          setBids(prevBids =>
+            prevBids.map((bid, index) =>
+              selectedBids.includes(index) ? { ...bid, revealed: true } : bid
+            )
+          );
+          setSelectedBids([]);
 
-          fakes[contractIndex] = bid.fake;
+          // 提示用户可以查看结果
+          setTimeout(() => {
+            notification.info("您可以前往结果页面查看最新的拍卖状态");
+          }, 2000);
 
-          // 确保secret是正确的字符串格式
-          try {
-            const secretHash = ethers.keccak256(ethers.toUtf8Bytes(bid.secret)) as `0x${string}`;
-            console.log(`出价 #${bidIndex} 的密钥哈希:`, secretHash);
-            secrets[contractIndex] = secretHash;
-          } catch (error) {
-            console.error(`处理出价 #${bidIndex} 的密钥时出错:`, error);
-            // 使用一个安全的默认值
-            secrets[contractIndex] = ethers.keccak256(ethers.toUtf8Bytes("error")) as `0x${string}`;
-          }
+          // 设置揭示成功状态
+          setRevealSuccess(true);
+          setRevealedCount(selectedBids.length);
+
         } else {
-          console.warn(`出价索引 ${contractIndex} 超出有效范围 (0-${Number(currentBidCount) - 1})`);
+          notification.error("交易失败，请重试");
+        }
+      } else {
+        // 如果没有 publicClient，只能发送交易但无法确认
+        notification.warning("无法确认交易状态，请稍后检查结果页面");
+      }
+
+    } catch (error: any) {
+      // 提供更详细的错误信息
+      let errorMessage = "揭示失败";
+      if (error.message) {
+        if (error.message.includes("User rejected")) {
+          errorMessage = "用户取消了交易";
+        } else if (error.message.includes("insufficient funds")) {
+          errorMessage = "余额不足，无法支付Gas费用";
+        } else if (error.shortMessage) {
+          errorMessage = `揭示失败: ${error.shortMessage}`;
+        } else {
+          errorMessage = `揭示失败: ${error.message}`;
         }
       }
 
-      // 打印最终的揭示数据
-      console.log("最终的揭示数据:");
-      console.log("Values:", values.map(v => ethers.formatEther(v)));
-      console.log("Fakes:", fakes);
-      console.log("Secrets:", secrets);
-      console.log("Current bid count:", currentBidCount);
-      console.log("Using auction address:", auctionAddress);
-
-      // 使用walletClient直接调用合约，确保使用正确的合约地址
-      if (!walletClient || !blindAuctionData || !auctionAddress) {
-        notification.error("钱包连接或合约数据缺失");
-        setIsRevealing(false);
-        return;
-      }
-
-      // 执行合约调用前再次验证
-      try {
-        // 验证合约存在并且方法可用
-        const code = await publicClient.getBytecode({ address: auctionAddress });
-        if (!code || code === '0x') {
-          notification.error("指定的拍卖合约地址无效");
-          setIsRevealing(false);
-          return;
-        }
-
-        // 执行合约调用
-        const txHash = await walletClient.writeContract({
-          address: auctionAddress,
-          abi: blindAuctionData.abi,
-          functionName: "reveal",
-          args: [values, fakes, secrets],
-        });
-
-        console.log("Transaction hash:", txHash);
-        notification.success("揭示出价成功！");
-
-        // 提示用户需要查看结果
-        notification.info("请稍后在拍卖结果页面查看最终结果", { duration: 8000 });
-
-        // 更新本地存储，标记已揭示的出价
-        const revealedKey = auctionAddress
-          ? `revealed_bids_${connectedAddress}_${auctionAddress}`
-          : `revealed_bids_${connectedAddress}`;
-        const revealedBids = localStorage.getItem(revealedKey);
-        const revealedIndices = revealedBids ? JSON.parse(revealedBids) : [];
-        const updatedRevealedIndices = [...revealedIndices, ...selectedBids];
-        localStorage.setItem(revealedKey, JSON.stringify(updatedRevealedIndices));
-
-        // 更新UI状态
-        const updatedBids = bids.map((bid, index) => ({
-          ...bid,
-          revealed: updatedRevealedIndices.includes(index)
-        }));
-        setBids(updatedBids);
-        setSelectedBids([]);
-      } catch (error) {
-        console.error("揭示出价合约调用出错:", error);
-        notification.error("揭示出价时出错，请确保您的出价数据正确");
-      }
-    } catch (error) {
-      console.error("Error revealing bids:", error);
-      notification.error("揭示出价时出错");
+      notification.error(errorMessage);
     } finally {
       setIsRevealing(false);
     }
   };
 
-  // 选择或取消选择出价
   const toggleBidSelection = (index: number) => {
+    if (bids[index].revealed) return;
     setSelectedBids(prev =>
-      prev.includes(index)
-        ? prev.filter(i => i !== index)
-        : [...prev, index]
+      prev.includes(index) ? prev.filter(i => i !== index) : [...prev, index]
     );
   };
 
-  // 时间戳转换成时间
   const timestampToDate = (timestamp: number) => {
-    if (!timestamp) return "未知";
+    return new Date(timestamp * 1000).toLocaleString('zh-CN');
+  };
 
-    // 检查是否为区块链时间戳（区块链时间戳通常为10位数，小于等于2^32）
-    if (timestamp < 2147483648) {
-      // 区块链时间戳是以秒为单位
-      console.log("区块链时间戳转换:", timestamp, new Date(timestamp * 1000).toLocaleString());
-      return new Date(timestamp * 1000).toLocaleString();
+  const calculateRevealProgress = () => {
+    if (phase !== 1 || !revealStartTime || !revealEndTime) return '0%';
+
+    try {
+      // 获取当前时间
+      const now = Math.floor(Date.now() / 1000);
+
+      // 计算揭示阶段总时长
+      const totalRevealDuration = revealEndTime - revealStartTime;
+
+      // 如果总时长为0或负数，返回0%
+      if (totalRevealDuration <= 0) return '0%';
+
+      // 计算已经过去的时间
+      const elapsedTime = now - revealStartTime;
+
+      // 计算进度百分比
+      const progressPercentage = (elapsedTime / totalRevealDuration) * 100;
+
+      // 确保百分比在0-100之间
+      return `${Math.min(Math.max(progressPercentage, 0), 100)}%`;
+    } catch (error) {
+      // 计算进度条出错，返回0%
+      return '0%';
     }
-
-    // 浏览器时间戳是以毫秒为单位，通常为13位数
-    console.log("浏览器时间戳转换:", timestamp, new Date(timestamp).toLocaleString());
-    return new Date(timestamp).toLocaleString();
   };
 
   if (!isClient) {
-    return <div className="flex justify-center items-center min-h-[60vh]">
-      <span className="loading loading-spinner loading-lg"></span>
-    </div>;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-[#020033] via-[#030045] to-[#020033]">
+        <span className="loading loading-spinner loading-lg text-primary"></span>
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-screen relative overflow-hidden bg-gradient-to-b from-[#020033] via-[#030045] to-[#020033]">
-      {/* 添加额外的渐变装饰层 */}
-      <div className="absolute inset-0">
-        {/* 左上角渐变 */}
-        <div className="absolute top-0 left-0 w-1/3 h-1/3 bg-gradient-radial from-[#0a0058]/30 to-transparent"></div>
+    <div className="min-h-screen relative overflow-hidden text-white">
+      <MetaHeader title="揭示出价 | 区块链盲拍平台" />
 
-        {/* 右下角渐变 */}
-        <div className="absolute bottom-0 right-0 w-1/3 h-1/3 bg-gradient-radial from-[#0a0058]/30 to-transparent"></div>
-
-        {/* 中心光晕 */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full bg-gradient-radial from-[#060050]/50 via-[#040045]/30 to-transparent"></div>
-      </div>
-
-      {/* 添加微妙的网格纹理 */}
-      <div className="absolute inset-0 bg-[linear-gradient(rgba(6,0,81,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(6,0,81,0.1)_1px,transparent_1px)] bg-[size:100px_100px]"></div>
-
-      {/* 星光效果容器 */}
-      <div className="star-container absolute inset-0 pointer-events-none z-10"></div>
-
-      {/* 流星效果 */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        {[...Array(3)].map((_, i) => (
-          <div
-            key={i}
-            className="shooting-star"
-            style={{
-              top: `${Math.random() * 50}%`,
-              left: `${Math.random() * 100}%`,
-              animationDelay: `${Math.random() * 20}s`,
-              animationDuration: `${45 + Math.random() * 20}s`
-            }}
-          ></div>
-        ))}
-      </div>
-
-      {/* 科技感背景装饰 */}
-      <div className="absolute inset-0 bg-grid-pattern opacity-10"></div>
-      <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-transparent to-purple-500"></div>
-
-      {/* 光晕效果 */}
-      <div className="absolute top-20 -left-40 w-80 h-80 bg-cyan-500/20 rounded-full filter blur-[100px] animate-pulse"></div>
-      <div className="absolute bottom-20 -right-40 w-80 h-80 bg-purple-500/20 rounded-full filter blur-[100px] animate-pulse"></div>
-
-      {/* 装饰线条 */}
-      <div className="absolute left-4 top-1/4 w-40 h-[2px] bg-cyan-500/50"></div>
-      <div className="absolute right-4 top-1/3 w-40 h-[2px] bg-purple-500/50"></div>
-      <div className="absolute left-8 bottom-1/4 w-20 h-[2px] bg-pink-500/50"></div>
-
-      {/* 科技装饰元素 */}
-      <div className="absolute left-6 top-40 w-20 h-20 border-l-2 border-t-2 border-cyan-500/50"></div>
-      <div className="absolute right-6 bottom-40 w-20 h-20 border-r-2 border-b-2 border-purple-500/50"></div>
+      {/* 星空背景 */}
+      <StarryBackground
+        meteorCount={20}
+        starCount={25}
+        asteroidCount={15}
+        theme="blue-purple"
+        showGradients={true}
+      />
 
       <div className="relative z-10 container mx-auto px-4 py-12">
-        <div className="flex flex-col items-center">
-          <div className="w-full max-w-4xl">
-            {/* 页面标题 */}
-            <div className="text-center mb-8">
-              <h1 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-blue-500 neon-text">
-                揭示出价
-              </h1>
-              <p className="mt-2 text-slate-300">
-                当前状态:
-                <span className={`font-medium ml-2 ${phase === 1 ? 'text-green-400' : 'text-red-400'}`}>
-                  {phase === 0
-                    ? "竞拍阶段（需等待竞拍结束后才能揭示）"
-                    : phase === 1
-                      ? `揭示阶段（剩余时间: ${timeLeft}）`
-                      : "拍卖已结束（无法再揭示出价）"}
-                </span>
-              </p>
+        <div className="text-center mb-10">
+          <h1 className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-yellow-400 via-orange-400 to-red-500 neon-text-yellow inline-block">
+            揭示您的出价
+          </h1>
+          <p className="mt-4 text-slate-300 max-w-2xl mx-auto">
+            对于拍卖: <span className="font-semibold text-orange-300">{auctionName}</span>
+          </p>
+
+          {/* 添加进度条和倒计时显示 */}
+          {phase === 1 && (
+            <div className="mt-6 max-w-md mx-auto">
+              <div className="flex justify-between text-xs text-slate-400 mb-1">
+                <span>揭示阶段</span>
+                <span>剩余时间: {timeLeft}</span>
+              </div>
+              <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-yellow-500 to-orange-500 transition-all duration-1000"
+                  style={{ width: calculateRevealProgress() }}
+                ></div>
+              </div>
             </div>
+          )}
+          {phase === 0 && (
+            <div className="mt-4 px-4 py-2 bg-blue-500/20 rounded-full text-blue-300 inline-block">
+              竞拍阶段尚未结束
+            </div>
+          )}
+          {phase === 2 && (
+            <div className="mt-4 px-4 py-2 bg-green-500/20 rounded-full text-green-300 inline-block">
+              揭示阶段已结束
+            </div>
+          )}
+        </div>
 
-            {!connectedAddress ? (
-              <div className="bg-slate-900/70 backdrop-blur-md rounded-xl p-8 text-center border border-slate-700 shadow-lg hologram">
-                <div className="scan-line"></div>
-                <div className="text-6xl mb-6 opacity-80">🔒</div>
-                <h3 className="text-xl font-semibold mb-4 text-white">请连接钱包</h3>
-                <p className="text-slate-300 mb-6">您需要连接以太坊钱包来揭示您的出价</p>
-                <button className="btn btn-primary bg-gradient-to-r from-blue-600 to-purple-600 border-0 btn-cyber">
-                  连接钱包
-                </button>
-              </div>
-            ) : phase !== 1 ? (
-              <div className="bg-slate-900/70 backdrop-blur-md rounded-xl p-8 text-center border border-slate-700 shadow-lg scan-container">
-                <div className="scan-line"></div>
-                <div className="text-6xl mb-6 opacity-80 encrypt-icon">
-                  {phase === 0 ? "⏳" : "🏁"}
+        {!connectedAddress ? (
+          <div className="text-center p-8 bg-slate-900/50 rounded-xl">请先连接钱包</div>
+        ) : phase === 0 ? (
+          <div className="text-center p-8 bg-slate-900/50 rounded-xl">拍卖尚未进入揭示阶段。</div>
+        ) : phase === 2 ? (
+          <div className="text-center p-8 bg-slate-900/50 rounded-xl">揭示阶段已结束。</div>
+        ) : bids.length === 0 ? (
+          // 用户没有参与当前拍卖的提示
+          <div className="bg-slate-900/70 backdrop-blur-md rounded-xl p-10 text-center border border-slate-700/60 shadow-lg">
+            <div className="text-6xl mb-6 opacity-80">🚫</div>
+            <h3 className="text-2xl font-semibold mb-4 text-white">您未参与此拍卖</h3>
+            <p className="text-slate-300 mb-6">
+              您没有在这个拍卖中提交任何出价，因此无法进行揭示操作。
+              <br />
+              如果您想参与其他拍卖的揭示，请前往相应的拍卖页面。
+            </p>
+            <div className="flex justify-center gap-4">
+              <Link
+                href={`/auction/${auctionAddress}`}
+                className="group relative inline-flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-blue-600 via-blue-500 to-purple-600 hover:from-blue-500 hover:via-blue-400 hover:to-purple-500 text-white font-bold rounded-2xl transition-all duration-300 transform hover:scale-105 shadow-2xl shadow-blue-500/40 hover:shadow-blue-500/60 overflow-hidden border border-blue-400/30"
+              >
+                <div className="relative z-10 flex items-center gap-3">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 transition-transform duration-300 group-hover:-translate-x-1 group-hover:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                  </svg>
+                  <span className="text-lg">返回拍卖详情</span>
                 </div>
-                <h3 className="text-xl font-semibold mb-4 text-white">
-                  {phase === 0 ? "竞拍阶段尚未结束" : "揭示阶段已结束"}
-                </h3>
-                <p className="mb-6 text-slate-300">
-                  {phase === 0
-                    ? "请等待竞拍阶段结束后再来揭示您的出价。"
-                    : "揭示阶段已结束，无法再揭示出价。您可以查看拍卖结果。"}
-                </p>
-                <a
-                  href={phase === 0
-                    ? "/my-bids"
-                    : auctionAddress
-                      ? `/results?address=${auctionAddress}`
-                      : "/results"}
-                  className="btn btn-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white border-0 glow-on-hover"
-                >
-                  {phase === 0 ? "查看我的出价" : "查看拍卖结果"}
-                </a>
-              </div>
-            ) : bids.length === 0 ? (
-              <div className="bg-slate-900/70 backdrop-blur-md rounded-xl p-8 text-center border border-slate-700 shadow-lg hologram">
-                <div className="scan-line"></div>
-                <div className="text-6xl mb-6 opacity-80">📭</div>
-                <h3 className="text-xl font-semibold mb-4 text-white">暂无出价记录</h3>
-                <p className="text-slate-300 mb-6">您没有参与过任何竞拍，无法进行揭示</p>
-                <a href="/bid" className="btn btn-primary bg-gradient-to-r from-blue-600 to-purple-600 border-0 glow-on-hover">
-                  立即参与竞拍
-                </a>
-              </div>
-            ) : (
-              <div>
-                {/* 揭示说明 */}
-                <div className="bg-slate-800/70 backdrop-blur-md rounded-xl p-5 mb-6 border border-slate-700 shadow-md">
-                  <h2 className="text-xl font-semibold mb-3 text-white flex items-center">
-                    <span className="mystery-icon mr-2">🔓</span> 揭示说明
-                  </h2>
-                  <ul className="list-disc pl-5 space-y-2 text-slate-300">
-                    <li>在揭示阶段，您需要提供您在竞拍阶段提交的出价的具体信息</li>
-                    <li>系统会验证您提供的信息与竞拍阶段提交的加密数据是否匹配</li>
-                    <li>如果信息匹配且出价有效，您的出价将被考虑，最高出价者将获得拍品</li>
-                    <li><span className="font-semibold text-yellow-400">重要：确保您输入的出价金额、是否虚假竞拍和密钥与竞拍时完全一致，否则您的押金将被没收</span></li>
-                    <li><span className="font-semibold text-yellow-400">重要：如果您未在揭示阶段提交您的出价，您的押金将被没收</span></li>
-                  </ul>
-                </div>
-
-                {/* 出价列表 */}
-                <div className="bg-slate-900/70 backdrop-blur-md rounded-xl overflow-hidden border border-slate-700 shadow-lg mb-6">
-                  <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-4">
-                    <h2 className="text-xl font-bold text-white">选择要揭示的出价</h2>
-                    <p className="text-sm text-blue-100 mt-1">
-                      {auctionAddress ? (
-                        <>
-                          拍卖地址: <span className="font-mono">{auctionAddress}</span>
-                          <br />
-                          当前状态: <span className={"text-" + (Number(phase) === 0 ? "cyan" : Number(phase) === 1 ? "yellow" : "red") + "-300"}>
-                            {Number(phase) === 0 ? '竞拍阶段' : Number(phase) === 1 ? '揭示阶段' : '已结束'}
-                          </span>
-                        </>
-                      ) : (
-                        "请选择一个拍卖"
-                      )}
-                    </p>
-                  </div>
-
-                  <div className="p-4">
-                    {selectedBids.length === 0 ? (
-                      <div className="text-center text-slate-400 py-4">
-                        请选择要揭示的出价
-                      </div>
-                    ) : (
-                      <div className="bg-slate-800/50 rounded-lg p-4 mb-4">
-                        <h3 className="text-lg font-medium text-white mb-2">已选择 {selectedBids.length} 个出价</h3>
-                        <p className="text-sm text-slate-300">
-                          点击下方的"揭示出价"按钮提交您的真实出价信息。这将会向区块链提交您的原始出价数据用于验证。
-                        </p>
-                      </div>
-                    )}
-
-                    {/* 添加出价列表展示 */}
-                    {bids.length > 0 && (
-                      <div className="my-4">
-                        <h3 className="text-lg font-medium text-white mb-3">您的出价记录</h3>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-sm text-left">
-                            <thead className="text-xs uppercase bg-slate-800/80">
-                              <tr>
-                                <th className="px-4 py-3">选择</th>
-                                <th className="px-4 py-3">时间</th>
-                                <th className="px-4 py-3">拍卖地址</th>
-                                <th className="px-4 py-3">出价金额</th>
-                                <th className="px-4 py-3">状态</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {bids.map((bid, index) => (
-                                <tr key={index} className={`border-b border-slate-700/30 hover:bg-slate-800/40 ${selectedBids.includes(index) ? 'bg-blue-900/20' : ''}`}>
-                                  <td className="px-4 py-3">
-                                    <input
-                                      type="checkbox"
-                                      checked={selectedBids.includes(index)}
-                                      onChange={() => toggleBidSelection(index)}
-                                      disabled={bid.revealed || phase !== 1}
-                                      className="checkbox checkbox-sm checkbox-primary"
-                                    />
-                                  </td>
-                                  <td className="px-4 py-3">{timestampToDate(bid.timestamp)}</td>
-                                  <td className="px-4 py-3 font-mono text-xs">
-                                    {bid.auctionAddress ? `${bid.auctionAddress.substring(0, 6)}...${bid.auctionAddress.substring(bid.auctionAddress.length - 4)}` : "未知"}
-                                  </td>
-                                  <td className="px-4 py-3">{bid.value} ETH</td>
-                                  <td className="px-4 py-3">
-                                    {bid.revealed ? (
-                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                        已揭示
-                                      </span>
-                                    ) : (
-                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                                        未揭示
-                                      </span>
-                                    )}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="mt-4 flex justify-between items-center">
-                      <div className="text-slate-300 text-sm">
-                        <p>
-                          提示：揭示出价需要消耗一定的Gas费用。未能正确揭示的出价将无法参与竞拍，且押金不予退还。
-                        </p>
-                        {/* 添加拍卖时间信息展示 */}
-                        {auctionAddress && bids.length > 0 && bids[0].revealEnd && (
-                          <div className="mt-2 p-2 bg-blue-900/30 rounded-lg text-blue-200 text-xs">
-                            <p>拍卖揭示结束时间: {timestampToDate(bids[0].revealEnd)}</p>
-                            <p>请务必在此时间前完成揭示操作，否则将无法参与竞拍结果。</p>
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        onClick={handleReveal}
-                        disabled={selectedBids.length === 0 || phase !== 1 || isRevealing}
-                        className={`btn btn-lg ${selectedBids.length === 0 || phase !== 1 ? 'btn-disabled' : 'bg-gradient-to-r from-yellow-600 to-amber-600 hover:from-yellow-700 hover:to-amber-700 text-white border-0'}`}
-                      >
-                        {isRevealing ? (
-                          <>
-                            <span className="loading loading-spinner"></span>
-                            揭示中...
-                          </>
-                        ) : (
-                          '揭示出价'
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 已揭示出价的摘要 */}
-                {bids.some(bid => bid.revealed) && (
-                  <div className="mt-10 bg-green-900/20 rounded-xl p-5 border border-green-800/40 shadow-inner">
-                    <h3 className="text-lg font-semibold mb-4 text-green-300 flex items-center">
-                      <span className="mr-2">✅</span> 已揭示的出价
-                    </h3>
-                    <div className="flex items-center justify-between">
-                      <p className="text-slate-300">
-                        您已成功揭示 <span className="font-semibold text-green-300">{bids.filter(bid => bid.revealed).length}</span> 个出价
-                      </p>
-                      <a
-                        href={auctionAddress ? `/results?address=${auctionAddress}` : "/results"}
-                        className="btn btn-sm bg-green-700 hover:bg-green-600 text-white border-0 glow-on-hover"
-                      >
-                        查看拍卖结果
-                      </a>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* 导航链接 */}
-            <div className="mt-8 flex justify-center space-x-4">
-              <a href="/" className="text-slate-400 hover:text-blue-400 transition-colors">
-                返回首页
-              </a>
-              <a href="/my-bids" className="text-slate-400 hover:text-purple-400 transition-colors">
+                <div className="absolute inset-0 bg-gradient-to-r from-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-blue-600/30 to-purple-600/30 blur-xl -z-10"></div>
+              </Link>
+              <Link
+                href="/all-auctions"
+                className="btn btn-lg bg-gradient-to-r from-green-600 to-teal-600 hover:from-green-700 hover:to-teal-700 text-white border-0"
+              >
+                浏览所有拍卖
+              </Link>
+              <Link
+                href="/my-bids"
+                className="btn btn-lg bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-700 hover:to-cyan-700 text-white border-0"
+              >
                 我的竞拍记录
-              </a>
-              <a href="/bid" className="text-slate-400 hover:text-cyan-400 transition-colors">
-                竞拍页面
-              </a>
+              </Link>
             </div>
           </div>
-        </div>
+        ) : revealSuccess ? (
+          // 揭示成功的简洁界面
+          <div className="text-center">
+            <div className="bg-slate-900/70 backdrop-blur-md rounded-xl p-8 border border-green-500/50">
+              <div className="text-5xl mb-4">🎉</div>
+              <h2 className="text-3xl font-bold text-green-400 mb-4">揭示成功！</h2>
+              <p className="text-slate-300 mb-6">
+                您已成功揭示了 {revealedCount} 个出价，交易已确认到区块链上。
+              </p>
+
+              <div className="flex justify-center gap-4">
+                {/* <Link
+                      href={`/results?address=${auctionAddress}`}
+                  className="btn btn-primary"
+                    >
+                      查看拍卖结果
+                    </Link> */}
+                <Link
+                  href={`/auction/${auctionAddress}`}
+                  className="group relative inline-flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-blue-600 via-purple-600 to-blue-600 hover:from-blue-500 hover:via-purple-500 hover:to-blue-500 text-white font-bold rounded-2xl transition-all duration-300 transform hover:scale-105 shadow-xl shadow-blue-500/30 hover:shadow-blue-500/50 overflow-hidden border border-blue-400/30"
+                >
+                  <div className="relative z-10 flex items-center gap-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 transition-transform duration-300 group-hover:-translate-x-1 group-hover:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                    </svg>
+                    <span className="text-lg">返回拍卖详情</span>
+                  </div>
+                  <div className="absolute inset-0 bg-gradient-to-r from-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                  <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-blue-600/30 to-purple-600/30 blur-xl -z-10"></div>
+                </Link>
+
+                <Link
+                  href="/my-bids"
+                  className="group relative inline-flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-green-600 via-emerald-500 to-teal-600 hover:from-green-500 hover:via-emerald-400 hover:to-teal-500 text-white font-bold rounded-2xl transition-all duration-300 transform hover:scale-105 shadow-xl shadow-green-500/30 hover:shadow-green-500/50 overflow-hidden border border-green-400/30"
+                >
+                  <div className="relative z-10 flex items-center gap-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 transition-transform duration-300 group-hover:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <span className="text-lg">查看竞拍记录</span>
+                  </div>
+                  <div className="absolute inset-0 bg-gradient-to-r from-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                  <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-green-600/30 to-teal-600/30 blur-xl -z-10"></div>
+                </Link>
+
+                {bids.some(bid => !bid.revealed) && (
+                  <button
+                    onClick={() => setRevealSuccess(false)}
+                    className="group relative inline-flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-amber-600 via-orange-500 to-red-600 hover:from-amber-500 hover:via-orange-400 hover:to-red-500 text-white font-bold rounded-2xl transition-all duration-300 transform hover:scale-105 shadow-xl shadow-amber-500/30 hover:shadow-amber-500/50 overflow-hidden border border-amber-400/30"
+                  >
+                    <div className="relative z-10 flex items-center gap-3">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 transition-transform duration-300 group-hover:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                      </svg>
+                      <span className="text-lg">继续揭示其他出价</span>
+                    </div>
+                    <div className="absolute inset-0 bg-gradient-to-r from-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                    <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-amber-600/30 to-red-600/30 blur-xl -z-10"></div>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              <div className="lg:col-span-2">
+                <div className="bg-slate-900/50 backdrop-blur-md rounded-2xl p-6 border border-slate-700/50">
+                  <h2 className="text-2xl font-semibold mb-4 text-orange-300">选择要揭示的出价</h2>
+                  <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
+                    {bids.length > 0 ? (
+                      bids.map((bid, index) => (
+                        <div
+                          key={index}
+                          onClick={() => toggleBidSelection(index)}
+                          className={`p-4 rounded-lg border-2 transition-all duration-300 cursor-pointer ${selectedBids.includes(index) ? 'border-orange-500 bg-orange-500/10' : 'border-slate-700 hover:border-orange-500/50'
+                            } ${bid.revealed ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                          <div className="flex justify-between items-center">
+                            <div>
+                              <p className="font-bold text-lg">
+                                {bid.value} ETH {bid.fake && <span className="text-sm text-slate-400">(虚假出价)</span>}
+                              </p>
+                              <p className="text-xs text-slate-400">时间: {timestampToDate(bid.timestamp)}</p>
+                            </div>
+                            {bid.revealed ? (
+                              <span className="px-3 py-1 text-xs font-semibold text-green-300 bg-green-500/10 rounded-full">已揭示</span>
+                            ) : (
+                              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${selectedBids.includes(index) ? 'border-orange-500 bg-orange-500' : 'border-slate-500'}`}>
+                                {selectedBids.includes(index) && <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p>没有找到您的出价记录。</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="lg:col-span-1">
+                <div className="bg-slate-900/50 backdrop-blur-md rounded-2xl p-6 border border-slate-700/50 sticky top-24">
+                  <div className="text-center mb-6">
+                    <p className="text-slate-400 text-sm">揭示剩余时间</p>
+                    <p className="text-4xl font-mono tracking-widest mt-1">{timeLeft}</p>
+                  </div>
+                  <div className="mt-6 flex gap-4">
+                    <button
+                      onClick={handleReveal}
+                      disabled={selectedBids.length === 0 || isRevealing}
+                      className="flex-1 bg-purple-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {isRevealing ? "揭示中..." : `揭示选中的 ${selectedBids.length} 个出价`}
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-4 text-center">揭示后，您的出价和金额将被公开验证。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
-} 
+}
+
+{/* 添加一些自定义CSS */ }
+<style jsx global>{`
+  .glow-text {
+    text-shadow: 0 0 10px rgba(66, 153, 225, 0.5), 0 0 20px rgba(66, 153, 225, 0.3);
+  }
+  
+  @keyframes pulse-border {
+    0%, 100% { border-color: rgba(102, 0, 255, 0.3); }
+    50% { border-color: rgba(102, 0, 255, 0.6); }
+  }
+  
+  .neon-text {
+    text-shadow: 0 0 5px rgba(102, 0, 255, 0.8), 0 0 20px rgba(102, 0, 255, 0.5);
+  }
+
+  @keyframes fadeIn {
+    from { 
+      opacity: 0; 
+      transform: translateY(10px) scale(0.95); 
+    }
+    to { 
+      opacity: 1; 
+      transform: translateY(0) scale(1); 
+    }
+  }
+  
+  .animate-fadeIn {
+    animation: fadeIn 0.5s ease-out forwards;
+  }
+
+  @keyframes gradientShift {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+
+  .animate-gradient {
+    background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+    background-size: 400% 400%;
+    animation: gradientShift 4s ease infinite;
+  }
+
+  .group:hover .group-hover\\:scale-110 {
+    transform: scale(1.1);
+  }
+
+  .group:hover .group-hover\\:rotate-3 {
+    transform: rotate(3deg);
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+  }
+
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+
+  .border-gradient {
+    border: 2px solid transparent;
+    background: linear-gradient(45deg, rgba(59, 130, 246, 0.3), rgba(147, 51, 234, 0.3)) border-box;
+    mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+  }
+`}</style> 

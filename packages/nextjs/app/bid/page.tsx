@@ -1,99 +1,150 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ethers } from 'ethers';
-import { useScaffoldContract } from "~~/hooks/scaffold-eth/useScaffoldContract";
-import { useScaffoldReadContract } from "~~/hooks/scaffold-eth/useScaffoldReadContract";
-import { useScaffoldWriteContract } from "~~/hooks/scaffold-eth/useScaffoldWriteContract";
 import { useAccount, usePublicClient, useWalletClient } from 'wagmi';
 import { notification } from "~~/utils/scaffold-eth";
 import { useSearchParams } from 'next/navigation';
 import { useDeployedContractInfo } from "~~/hooks/scaffold-eth/useDeployedContractInfo";
 import { useRouter } from 'next/navigation';
-import { formatEther } from 'viem';
+import { formatEther, parseEther, keccak256, encodePacked, toBytes, Hex } from 'viem';
+import MeteorRain from '~~/components/MeteorRain';
+import StarryBackground from '~~/components/StarryBackground';
+import { MetaHeader } from '~~/components/MetaHeader';
 
 export default function BidPage() {
   const { address: connectedAddress } = useAccount();
   const searchParams = useSearchParams();
-  const auctionAddress = searchParams?.get('address') as `0x${string}` || undefined;
+  const auctionAddress = searchParams?.get('address') as `0x${string}` | undefined;
   const [value, setValue] = useState<string>('');
   const [fake, setFake] = useState<boolean>(false);
   const [secret, setSecret] = useState<string>('');
-  const [blindedBid, setBlindedBid] = useState<string>('');
+  const [blindedBid, setBlindedBid] = useState<Hex | ''>('');
   const [deposit, setDeposit] = useState<string>('');
   const [isCalculating, setIsCalculating] = useState<boolean>(false);
   const [timeLeft, setTimeLeft] = useState<string>('');
-  const [phase, setPhase] = useState<number>(0);
+  const [phase, setPhase] = useState<number | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [hasParticipated, setHasParticipated] = useState<boolean>(false);
-  const [biddingEndData, setBiddingEndData] = useState<bigint | undefined>();
-  const [revealEndData, setRevealEndData] = useState<bigint | undefined>();
   const [minPrice, setMinPrice] = useState<string>('0');
   const [minPriceWei, setMinPriceWei] = useState<bigint>(BigInt(0));
   const [auctionMetadata, setAuctionMetadata] = useState<any>(null);
+  const [txHash, setTxHash] = useState<string>('');
+  const [isWaitingConfirmation, setIsWaitingConfirmation] = useState<boolean>(false);
+  const [txConfirmed, setTxConfirmed] = useState<boolean>(false);
   const router = useRouter();
 
-  // 获取公共客户端和合约信息
   const publicClient = usePublicClient();
   const { data: blindAuctionInfo } = useDeployedContractInfo("BlindAuction");
   const { data: factoryContractData } = useDeployedContractInfo("BlindAuctionFactory");
+  const { data: nftContractData } = useDeployedContractInfo("AuctionNFT");
   const { data: walletClient } = useWalletClient();
 
-  // 从URL获取当前拍卖合约地址
   useEffect(() => {
     if (!auctionAddress) {
       setError("未指定拍卖地址，请从正确的拍卖详情页进入");
       setLoading(false);
-    } else {
-      setLoading(false);
     }
   }, [auctionAddress]);
 
-  // 获取合约状态
   useEffect(() => {
     const fetchAuctionData = async () => {
       if (!auctionAddress || !publicClient || !blindAuctionInfo) return;
 
       try {
-        // 获取拍卖阶段
-        const phaseData = await publicClient.readContract({
-          address: auctionAddress,
-          abi: blindAuctionInfo.abi,
-          functionName: 'getAuctionPhase',
-        });
-
-        // 获取竞拍结束时间和揭示结束时间
-        const [biddingEndData, revealEndData, endedData] = await Promise.all([
-          publicClient.readContract({
-            address: auctionAddress,
-            abi: blindAuctionInfo.abi,
-            functionName: 'biddingEnd',
-          }),
-          publicClient.readContract({
-            address: auctionAddress,
-            abi: blindAuctionInfo.abi,
-            functionName: 'revealEnd',
-          }),
-          publicClient.readContract({
-            address: auctionAddress,
-            abi: blindAuctionInfo.abi,
-            functionName: 'ended',
-          })
+        const [biddingStartData, biddingEndData, revealEndData, endedData] = await Promise.all([
+          publicClient.readContract({ address: auctionAddress, abi: blindAuctionInfo.abi, functionName: 'biddingStart' }),
+          publicClient.readContract({ address: auctionAddress, abi: blindAuctionInfo.abi, functionName: 'biddingEnd' }),
+          publicClient.readContract({ address: auctionAddress, abi: blindAuctionInfo.abi, functionName: 'revealEnd' }),
+          publicClient.readContract({ address: auctionAddress, abi: blindAuctionInfo.abi, functionName: 'ended' })
         ]);
 
-        // 获取拍卖元数据（包含最低出价信息）
+        // 🔧 增强元数据和最低价格获取逻辑
+        let metadata = {
+          name: "未命名拍卖",
+          description: "无描述",
+          image: "",
+          minPrice: "0",
+        };
+
         try {
-          if (factoryContractData) {
-            // 通过工厂合约获取拍卖创建事件
+          // 首先尝试检查是否为NFT拍卖
+          const isNFTAuction = await publicClient.readContract({
+            address: auctionAddress,
+            abi: blindAuctionInfo.abi,
+            functionName: 'isNFTAuction',
+          }) as boolean;
+
+          console.log(`竞拍页面拍卖 ${auctionAddress} 是否为NFT拍卖:`, isNFTAuction);
+
+          if (isNFTAuction && nftContractData) {
+            // 获取NFT Token ID和合约地址
+            const [nftTokenId, nftContractAddress] = await Promise.all([
+              publicClient.readContract({
+                address: auctionAddress,
+                abi: blindAuctionInfo.abi,
+                functionName: 'nftTokenId',
+              }) as Promise<bigint>,
+              publicClient.readContract({
+                address: auctionAddress,
+                abi: blindAuctionInfo.abi,
+                functionName: 'nftContract',
+              }) as Promise<`0x${string}`>
+            ]);
+
+            console.log(`竞拍页面NFT拍卖 - Token ID: ${nftTokenId}, 合约地址: ${nftContractAddress}`);
+
+            if (nftContractAddress && nftTokenId > 0n) {
+              try {
+                // 从NFT合约获取元数据
+                const nftMetadata = await publicClient.readContract({
+                  address: nftContractAddress,
+                  abi: nftContractData.abi,
+                  functionName: 'nftMetadata',
+                  args: [nftTokenId],
+                }) as readonly [string, string, string, bigint, `0x${string}`, boolean, `0x${string}`, bigint];
+
+                const [name, description, imageHash, minPriceWei] = nftMetadata;
+
+                // 构建图片URL
+                let imageUrl = "";
+                if (imageHash) {
+                  if (imageHash.startsWith('http')) {
+                    imageUrl = imageHash;
+                  } else if (imageHash.startsWith('ipfs://')) {
+                    const hash = imageHash.replace('ipfs://', '');
+                    imageUrl = `https://ipfs.io/ipfs/${hash}`;
+                  } else if (imageHash.trim()) {
+                    imageUrl = `https://ipfs.io/ipfs/${imageHash}`;
+                  }
+                }
+
+                // 转换价格
+                const minPriceValue = minPriceWei ? minPriceWei.toString() : "0";
+
+                metadata = {
+                  name: name || `NFT #${Number(nftTokenId)}`,
+                  description: description || "无描述",
+                  image: imageUrl,
+                  minPrice: minPriceValue,
+                };
+
+                console.log("从NFT合约获取到竞拍页面拍卖的元数据:", metadata);
+              } catch (nftError) {
+                console.error("从NFT合约获取竞拍页面拍卖元数据失败:", nftError);
+              }
+            }
+          }
+
+          // 如果从NFT合约获取失败或不是NFT拍卖，尝试从事件日志获取
+          if (metadata.minPrice === "0" && factoryContractData) {
+            console.log("尝试从事件日志获取竞拍页面拍卖的元数据...");
             const logs = await publicClient.getContractEvents({
               address: factoryContractData.address,
               abi: factoryContractData.abi,
               eventName: 'AuctionCreated',
-              args: {
-                auctionAddress: auctionAddress
-              },
+              args: { auctionAddress: auctionAddress },
               fromBlock: BigInt(0),
             });
 
@@ -101,321 +152,240 @@ export default function BidPage() {
               const metadataStr = logs[0].args.metadata as string;
               if (metadataStr) {
                 try {
-                  const metadata = JSON.parse(metadataStr);
-                  setAuctionMetadata(metadata);
-
-                  // 处理最低出价：metadata.minPrice可能是wei格式的字符串
-                  const minPriceWei = BigInt(metadata.minPrice || '0');
-                  const minPriceEth = formatEther(minPriceWei);
-
-                  setMinPrice(minPriceEth);
-                  setMinPriceWei(minPriceWei);
-                  console.log("获取到拍卖最低出价:", {
-                    wei: metadata.minPrice,
-                    eth: minPriceEth
-                  });
+                  const parsedMetadata = JSON.parse(metadataStr);
+                  metadata = {
+                    ...parsedMetadata,
+                    // 确保图片URL正确格式化
+                    image: parsedMetadata.imageHash
+                      ? `https://ipfs.io/ipfs/${parsedMetadata.imageHash}`
+                      : parsedMetadata.image || ""
+                  };
+                  console.log("从事件日志获取到竞拍页面拍卖的元数据:", metadata);
                 } catch (e) {
-                  console.error("解析元数据字符串失败:", e);
+                  console.error("解析竞拍页面拍卖元数据字符串失败:", e);
                 }
               }
             }
           }
         } catch (error) {
-          console.warn("获取拍卖元数据失败，将使用默认值:", error);
+          console.error("获取竞拍页面拍卖元数据失败:", error);
         }
 
-        // 计算剩余时间和确定实际阶段
+        // 设置拍卖元数据和最低价格
+        setAuctionMetadata(metadata);
+        const minPriceWei = BigInt(metadata.minPrice || '0');
+        const formattedMinPrice = minPriceWei > 0n ? formatEther(minPriceWei) : "0";
+        setMinPrice(formattedMinPrice);
+        setMinPriceWei(minPriceWei);
+
+        console.log(`竞拍页面设置最低价格: ${formattedMinPrice} ETH (Wei: ${minPriceWei.toString()})`);
+
         const now = Math.floor(Date.now() / 1000);
-        let currentPhase = Number(phaseData);
+        const ended = Boolean(endedData);
+        let calculatedPhase = 0;
 
-        // 使用合约返回的阶段状态，不需要额外判断
-        // 0: 未开始, 1: 竞标阶段, 2: 披露阶段, 3: 拍卖结束
-        setPhase(currentPhase);
+        if (ended) calculatedPhase = 3;
+        else if (now > Number(revealEndData)) calculatedPhase = 3;
+        else if (now > Number(biddingEndData)) calculatedPhase = 2;
+        else if (now < Number(biddingStartData)) calculatedPhase = 0;
+        else calculatedPhase = 1;
 
-        // 计算剩余时间
-        if (currentPhase === 0 && biddingEndData) {
-          // 未开始阶段，显示竞拍开始倒计时
-          const startTime = now; // 这里需要获取biddingStart
-          // 先获取biddingStart
-          const biddingStartData = await publicClient.readContract({
-            address: auctionAddress,
-            abi: blindAuctionInfo.abi,
-            functionName: 'biddingStart',
-          });
+        setPhase(calculatedPhase);
 
-          const remaining = Math.max(0, Number(biddingStartData) - now);
-          const hours = Math.floor(remaining / 3600);
-          const minutes = Math.floor((remaining % 3600) / 60);
-          const seconds = remaining % 60;
-          setTimeLeft(`${hours}小时 ${minutes}分钟 ${seconds}秒`);
-        } else if (currentPhase === 1 && biddingEndData) {
-          // 竞拍阶段显示竞拍剩余时间
-          const endTime = Number(biddingEndData);
-          const remaining = Math.max(0, endTime - now);
+        let remaining = 0;
+        if (calculatedPhase === 0) remaining = Math.max(0, Number(biddingStartData) - now);
+        else if (calculatedPhase === 1) remaining = Math.max(0, Number(biddingEndData) - now);
+        else if (calculatedPhase === 2) remaining = Math.max(0, Number(revealEndData) - now);
 
-          const hours = Math.floor(remaining / 3600);
-          const minutes = Math.floor((remaining % 3600) / 60);
-          const seconds = remaining % 60;
-          setTimeLeft(`${hours}小时 ${minutes}分钟 ${seconds}秒`);
-        } else if (currentPhase === 2 && revealEndData) {
-          // 揭示阶段显示揭示剩余时间
-          const endTime = Number(revealEndData);
-          const remaining = Math.max(0, endTime - now);
+        const hours = Math.floor(remaining / 3600);
+        const minutes = Math.floor((remaining % 3600) / 60);
+        const seconds = remaining % 60;
+        setTimeLeft(`${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`);
 
-          const hours = Math.floor(remaining / 3600);
-          const minutes = Math.floor((remaining % 3600) / 60);
-          const seconds = remaining % 60;
-          setTimeLeft(`${hours}小时 ${minutes}分钟 ${seconds}秒`);
-        } else {
-          // 拍卖已结束
-          setTimeLeft("0小时 0分钟 0秒");
-        }
+        // 数据加载完成，设置loading为false
+        setLoading(false);
 
-        // 更新竞拍结束时间和揭示结束时间的状态变量
-        setBiddingEndData(biddingEndData);
-        setRevealEndData(revealEndData);
       } catch (error) {
-        console.error("获取拍卖数据失败:", error);
+        console.error("获取竞拍页面拍卖数据失败:", error);
         setError("获取拍卖数据失败，该拍卖可能不存在");
+        setLoading(false);
       }
     };
 
     fetchAuctionData();
-    // 定期更新时间
     const intervalId = setInterval(fetchAuctionData, 10000);
     return () => clearInterval(intervalId);
-  }, [auctionAddress, publicClient, blindAuctionInfo, factoryContractData]);
+  }, [auctionAddress, publicClient, blindAuctionInfo, factoryContractData, nftContractData]);
 
-  // 检查用户是否已经参与过此拍卖
   useEffect(() => {
     if (connectedAddress && auctionAddress) {
       try {
-        const existingBids = JSON.parse(localStorage.getItem(`bids_${connectedAddress}`) || '[]');
-        const hasBidForThisAuction = existingBids.some((bid: any) =>
-          bid.auctionAddress === auctionAddress
-        );
-
-        setHasParticipated(hasBidForThisAuction);
+        const normalizedAddress = connectedAddress.toLowerCase();
+        const existingBids = JSON.parse(localStorage.getItem(`bids_${normalizedAddress}`) || '[]');
+        setHasParticipated(existingBids.some((bid: any) => bid.auctionAddress === auctionAddress));
       } catch (error) {
-        console.error("Error checking participation:", error);
+        // 检查参与状态出错，忽略错误
       }
     }
   }, [connectedAddress, auctionAddress]);
 
-  // 生成盲拍哈希
   const generateBlindedBid = async () => {
-    // 如果出价金额或密钥为空，则提示用户填写
     if (!value.trim() || !secret.trim()) {
       notification.error("请填写出价金额和密钥");
       return;
     }
-
     try {
-      // 设置正在计算状态
       setIsCalculating(true);
-      // 计算哈希值 keccak256(abi.encodePacked(value, fake, secret))
-      // 将出价金额转换为wei
-      const valueInWei = ethers.parseEther(value);
-      // 将出价金额、fake和密钥进行编码
-      const encodedData = ethers.solidityPacked(
-        ["uint", "bool", "bytes32"],
-        [valueInWei, fake, ethers.keccak256(ethers.toUtf8Bytes(secret))]
-      );
+      const valueInWei = parseEther(value);
 
-      // 计算哈希值
-      const hash = ethers.keccak256(encodedData);
-      // 设置盲出价
+      // 按照合约要求计算哈希
+      const secretBytes32 = keccak256(toBytes(secret));
+      const encodedData = encodePacked(
+        ["uint256", "bool", "bytes32"],
+        [valueInWei, fake, secretBytes32]
+      );
+      const hash = keccak256(encodedData);
       setBlindedBid(hash);
-      // 设置计算状态为完成
-      setIsCalculating(false);
     } catch (error) {
-      // 打印错误信息
-      console.error("Error generating hash:", error);
-      // 提示用户生成哈希时出错
-      notification.error("生成哈希时出错");
-      // 设置计算状态为完成
+      notification.error("计算哈希失败，请检查输入值");
+    } finally {
       setIsCalculating(false);
     }
   };
 
-  // 提交盲拍
   const handleBid = async () => {
-    // 检查拍卖地址是否已指定
-    if (!auctionAddress) {
-      notification.error("未指定拍卖地址");
+    if (!connectedAddress || !walletClient) {
+      notification.error("请先连接钱包");
       return;
     }
-
-    // 检查盲拍哈希是否已生成
+    if (!auctionAddress || !blindAuctionInfo) {
+      notification.error("拍卖信息不完整");
+      return;
+    }
     if (!blindedBid) {
       notification.error("请先生成盲拍哈希");
       return;
     }
-
-    // 检查当前是否在竞拍阶段
-    if (phase !== 1) {
-      notification.error("当前不在竞拍阶段，无法提交出价");
-      return;
-    }
-
-    // 检查钱包是否已连接，合约信息是否缺失
-    if (!walletClient || !blindAuctionInfo) {
-      notification.error("钱包未连接或合约信息缺失");
-      return;
-    }
-
-    // 严格验证出价和押金
-    try {
-      const minPriceNum = parseFloat(minPrice);
-      const valueNum = parseFloat(value);
-      const depositNum = parseFloat(deposit);
-
-      // 验证出价金额不能为空或无效
-      if (!value.trim() || isNaN(valueNum) || valueNum <= 0) {
-        notification.error("请输入有效的出价金额");
-        return;
-      }
-
-      // 验证押金不能为空或无效
-      if (!deposit.trim() || isNaN(depositNum) || depositNum <= 0) {
-        notification.error("请输入有效的押金金额");
-        return;
-      }
-
-      // 验证出价金额必须大于等于最低出价
-      if (valueNum < minPriceNum) {
-        notification.error(`出价金额必须大于等于最低出价 ${minPrice} ETH`);
-        return;
-      }
-
-      // 验证押金必须大于等于出价金额
-      if (depositNum < valueNum) {
-        notification.error("押金必须大于等于出价金额，以确保您能够支付承诺的价格");
-        return;
-      }
-
-      // 额外验证：押金必须至少等于最低出价（即使是假出价）
-      if (depositNum < minPriceNum) {
-        notification.error(`押金必须至少等于最低出价 ${minPrice} ETH`);
-        return;
-      }
-
-      console.log("验证通过:", {
-        minPrice: minPriceNum,
-        value: valueNum,
-        deposit: depositNum,
-        fake: fake
-      });
-
-    } catch (error) {
-      console.error("验证出价和押金时出错:", error);
-      notification.error("验证出价和押金时出错，请检查输入");
+    if (hasParticipated) {
+      notification.warning("您已经在此拍卖中出价，每个用户只能出价一次");
       return;
     }
 
     try {
-      // 先获取当前用户在合约中已有的投标数量
-      let contractBidCount = 0;
-      try {
-        if (publicClient && blindAuctionInfo && connectedAddress) {
-          const bidCount = await publicClient.readContract({
-            address: auctionAddress,
-            abi: blindAuctionInfo.abi,
-            functionName: 'getBidCount',
-            args: [connectedAddress],
-          });
-          contractBidCount = bidCount ? Number(bidCount) : 0;
+      const valueInWei = parseEther(value);
+      const depositInWei = parseEther(deposit);
 
-          // 检查用户是否已经竞拍过
-          const existingBids = JSON.parse(localStorage.getItem(`bids_${connectedAddress}`) || '[]');
-          const hasBidForThisAuction = existingBids.some((bid: any) =>
-            bid.auctionAddress === auctionAddress
-          );
-
-          if (hasBidForThisAuction) {
-            notification.warning("您已经在此拍卖中出价，每个用户只能出价一次");
-            return;
-          }
-        }
-      } catch (error) {
-        console.error("Error getting bid count:", error);
+      if (fake && depositInWei < minPriceWei) {
+        notification.error(`虚假出价时，押金必须至少为最低价 (${minPrice} ETH)`);
+        return;
+      }
+      if (!fake && depositInWei < valueInWei) {
+        notification.error("真实出价时，押金必须大于或等于您的出价");
+        return;
+      }
+      if (!fake && valueInWei < minPriceWei) {
+        notification.error(`真实出价必须大于或等于最低价 (${minPrice} ETH)`);
+        return;
       }
 
-      // 设置提交状态为true，显示加载中
       setIsSubmitting(true);
+      notification.info("正在提交您的出价...");
 
-      // 使用walletClient写合约
-      const tx = await walletClient.writeContract({
+      // 第一步：提交交易
+      const hash = await walletClient.writeContract({
         address: auctionAddress,
         abi: blindAuctionInfo.abi,
-        functionName: "bid",
-        args: [blindedBid as `0x${string}`],
-        value: deposit ? ethers.parseEther(deposit) : undefined, // 放置押金金额
+        functionName: 'bid',
+        args: [blindedBid],
+        value: depositInWei,
       });
 
-      notification.success("盲拍提交成功！");
-      // 修改竞标数据存储逻辑
-      const bidInfo = {
-        value,
-        fake,
-        secret,
-        blindedBid,
-        deposit,
-        timestamp: Date.now(),
-        contractIndex: Number(contractBidCount || 0), // 确保是数字类型
-        auctionAddress, // 添加拍卖地址
-        biddingEnd: biddingEndData ? Number(biddingEndData) : undefined, // 记录合约的竞拍结束时间
-        revealEnd: revealEndData ? Number(revealEndData) : undefined // 记录合约的揭示结束时间
-      };
-
-      // 记录调试信息
-      console.log("存储的竞标信息:", {
-        ...bidInfo,
-        address: connectedAddress,
-        contractBidCount: contractBidCount ? Number(contractBidCount) : 0
-      });
-
-      // 获取现有的出价记录
-      const existingBids = JSON.parse(localStorage.getItem(`bids_${connectedAddress}`) || '[]');
-      existingBids.push(bidInfo);
-      localStorage.setItem(`bids_${connectedAddress}`, JSON.stringify(existingBids));
-
-      // 重置表单
-      setValue('');
-      setSecret('');
-      setBlindedBid('');
-      setDeposit('');
-      setFake(false);
-
-      // 添加导航到所有竞拍页面
-      setTimeout(() => {
-        router.push('/all-auctions');
-      }, 1500); // 延迟1.5秒后跳转，让用户看到成功提示
-
-    } catch (error) {
-      console.error("Error placing bid:", error);
-      notification.error("提交盲拍时出错");
-    } finally {
-      // 无论成功或失败，都将提交状态设为false
+      // 保存交易哈希并设置等待确认状态
+      setTxHash(hash);
+      setIsWaitingConfirmation(true);
       setIsSubmitting(false);
+
+      notification.info("交易已提交，正在等待区块链确认...");
+
+      // 第二步：等待交易确认
+      if (publicClient) {
+        const receipt = await publicClient.waitForTransactionReceipt({
+          hash: hash,
+          timeout: 120000, // 2分钟超时
+        });
+
+        // 交易确认成功
+        if (receipt.status === 'success') {
+          setTxConfirmed(true);
+          setIsWaitingConfirmation(false);
+
+          notification.success("出价成功！您的出价已记录在区块链上。");
+
+          // 保存竞拍信息到本地
+          const bidInfo = {
+            value,
+            fake,
+            secret,
+            blindedBid,
+            deposit,
+            timestamp: Math.floor(Date.now() / 1000),
+            auctionAddress,
+            txHash: hash,
+          };
+
+          const normalizedAddress = connectedAddress.toLowerCase();
+          const existingBids = JSON.parse(localStorage.getItem(`bids_${normalizedAddress}`) || '[]');
+          existingBids.push(bidInfo);
+          localStorage.setItem(`bids_${normalizedAddress}`, JSON.stringify(existingBids));
+
+          setHasParticipated(true);
+        } else {
+          // 交易失败
+          setIsWaitingConfirmation(false);
+          setTxHash('');
+          notification.error("交易失败，请重试");
+        }
+      }
+
+    } catch (error: any) {
+      setIsSubmitting(false);
+      setIsWaitingConfirmation(false);
+      setTxHash('');
+
+      if (error.name === 'TimeoutError') {
+        notification.error("交易确认超时，请检查交易状态");
+      } else {
+        notification.error(`出价失败: ${error.shortMessage || error.message}`);
+      }
     }
   };
 
-  // 随机生成密钥
   const generateRandomSecret = () => {
-    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    const length = 12;
-    for (let i = 0; i < length; i++) {
-      result += characters.charAt(Math.floor(Math.random() * characters.length));
-    }
-    setSecret(result);
+    const randomBytes = new Uint8Array(32);
+    window.crypto.getRandomValues(randomBytes);
+    const secretHex = Array.from(randomBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    setSecret(`0x${secretHex}`);
   };
 
-  if (loading) {
+  const getPhaseInfo = () => {
+    switch (phase) {
+      case 0: return { text: "拍卖未开始", color: "text-blue-400", label: "竞拍开始倒计时" };
+      case 1: return { text: "竞拍中", color: "text-green-400", label: "竞拍剩余时间" };
+      case 2: return { text: "揭示中", color: "text-yellow-400", label: "已进入揭示阶段" };
+      case 3: return { text: "已结束", color: "text-red-400", label: "拍卖已结束" };
+      default: return { text: "加载中", color: "text-slate-400", label: "正在获取状态" };
+    }
+  };
+
+  const phaseInfo = getPhaseInfo();
+
+  if (loading || phase === null) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-[#020033] via-[#030045] to-[#020033]">
-        <span className="loading loading-spinner loading-lg text-primary"></span>
+        <div className="text-center">
+          <span className="loading loading-spinner loading-lg text-primary mb-4"></span>
+          <p className="text-slate-300">正在加载拍卖数据...</p>
+        </div>
       </div>
     );
   }
@@ -423,467 +393,762 @@ export default function BidPage() {
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-[#020033] via-[#030045] to-[#020033]">
-        <div className="bg-slate-900/70 backdrop-blur-md rounded-xl p-8 text-center border border-slate-700 shadow-lg max-w-md">
-          <div className="text-4xl mb-4 text-red-500">⚠️</div>
-          <h3 className="text-xl font-semibold mb-4 text-white">错误</h3>
-          <p className="text-slate-300 mb-6">{error}</p>
-          <a href="/all-auctions" className="btn btn-primary">浏览所有拍卖</a>
+        <div className="text-center p-8 bg-slate-900/50 rounded-xl">
+          <h2 className="text-2xl text-red-500">错误</h2>
+          <p className="mt-4">{error}</p>
+          <button onClick={() => router.back()} className="mt-6 btn btn-primary">返回</button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen relative overflow-hidden bg-gradient-to-b from-[#020033] via-[#030045] to-[#020033]">
-      {/* 添加额外的渐变装饰层 */}
-      <div className="absolute inset-0">
-        {/* 左上角渐变 */}
-        <div className="absolute top-0 left-0 w-1/3 h-1/3 bg-gradient-radial from-[#0a0058]/30 to-transparent"></div>
+    <>
+      <MetaHeader title="参与竞拍 | 区块链盲拍平台" />
+      <div className="min-h-screen relative overflow-hidden text-white">
+        {/* 星空背景 */}
+        <StarryBackground
+          meteorCount={25}
+          starCount={30}
+          asteroidCount={20}
+          theme="blue-purple"
+          showGradients={true}
+        />
 
-        {/* 右下角渐变 */}
-        <div className="absolute bottom-0 right-0 w-1/3 h-1/3 bg-gradient-radial from-[#0a0058]/30 to-transparent"></div>
+        {/* 装饰线条 */}
+        <div className="absolute top-[30%] left-0 w-full h-px bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent"></div>
+        <div className="absolute top-[70%] left-0 w-full h-px bg-gradient-to-r from-transparent via-purple-500/30 to-transparent"></div>
+        <div className="absolute top-0 left-[20%] w-px h-full bg-gradient-to-b from-transparent via-cyan-500/20 to-transparent"></div>
+        <div className="absolute top-0 left-[80%] w-px h-full bg-gradient-to-b from-transparent via-purple-500/20 to-transparent"></div>
 
-        {/* 中心光晕 */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full bg-gradient-radial from-[#060050]/50 via-[#040045]/30 to-transparent"></div>
-      </div>
+        {/* 流星雨效果 */}
+        <MeteorRain count={12} />
 
-      {/* 添加微妙的网格纹理 */}
-      <div className="absolute inset-0 bg-[linear-gradient(rgba(6,0,81,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(6,0,81,0.1)_1px,transparent_1px)] bg-[size:100px_100px]"></div>
+        {/* 主内容区 */}
+        <div className="relative z-10 w-full min-h-screen flex">
+          {/* 左侧边栏 */}
+          <div className="w-80 bg-slate-900/60 backdrop-blur-lg border-r border-slate-700/50 flex flex-col">
+            {/* 左侧顶部 - 页面标题 */}
+            <div className="p-6 border-b border-slate-700/50">
+              <h1 className="text-3xl font-bold text-white mb-2">参与竞拍</h1>
+              <div className="h-1 w-20 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full mb-3"></div>
+              <p className="text-slate-300 text-sm">
+                项目:
+                <span className="font-medium ml-1 text-white">
+                  {auctionMetadata?.name || "加载中..."}
+                </span>
+              </p>
+              <p className="text-slate-300 text-sm mt-1">
+                最低出价:
+                <span className="font-medium ml-1 text-green-400">{minPrice} ETH</span>
+              </p>
+            </div>
 
-      {/* 星光效果容器 */}
-      <div className="star-container absolute inset-0 pointer-events-none z-10"></div>
-
-      {/* 流星效果 */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        {[...Array(3)].map((_, i) => (
-          <div
-            key={i}
-            className="shooting-star"
-            style={{
-              top: `${Math.random() * 50}%`,
-              left: `${Math.random() * 100}%`,
-              animationDelay: `${Math.random() * 20}s`,
-              animationDuration: `${45 + Math.random() * 20}s`
-            }}
-          ></div>
-        ))}
-      </div>
-
-      {/* 科技感背景装饰 */}
-      <div className="absolute inset-0 bg-grid-pattern opacity-10"></div>
-      <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-transparent to-purple-500"></div>
-
-      {/* 光晕效果 */}
-      <div className="absolute top-20 -left-40 w-80 h-80 bg-cyan-500/20 rounded-full filter blur-[100px] animate-pulse"></div>
-      <div className="absolute bottom-20 -right-40 w-80 h-80 bg-purple-500/20 rounded-full filter blur-[100px] animate-pulse"></div>
-
-      {/* 装饰线条 */}
-      <div className="absolute left-4 top-1/4 w-40 h-[2px] bg-cyan-500/50"></div>
-      <div className="absolute right-4 top-1/3 w-40 h-[2px] bg-purple-500/50"></div>
-      <div className="absolute left-8 bottom-1/4 w-20 h-[2px] bg-pink-500/50"></div>
-
-      {/* 科技装饰元素 */}
-      <div className="absolute left-6 top-40 w-20 h-20 border-l-2 border-t-2 border-cyan-500/50"></div>
-      <div className="absolute right-6 bottom-40 w-20 h-20 border-r-2 border-b-2 border-purple-500/50"></div>
-
-      <div className="relative z-10 container mx-auto px-4 py-12">
-        <div className="flex flex-col items-center">
-          <div className="w-full max-w-4xl">
-            {/* 页面标题 */}
-            <div className="bg-slate-800/70 backdrop-blur-md rounded-xl p-8 text-center border border-slate-700 shadow-lg neon-border">
-              <div className="text-6xl mb-6 opacity-80 glow-icon">🔐</div>
-              <h2 className="text-2xl font-semibold mb-4 text-white">
-                参与竞拍
-              </h2>
-              <div className="mb-4">
-                <p className="text-slate-300 mb-2">拍卖地址: <span className="font-mono text-blue-300">{auctionAddress}</span></p>
-                <p className="text-slate-300">
-                  当前状态: <span className={`font-semibold ${phase === 0 ? 'text-blue-400' :
-                    phase === 1 ? 'text-green-400' :
-                      phase === 2 ? 'text-yellow-400' :
-                        'text-red-400'
-                    }`}>
-                    {phase === 0 ? '未开始' :
-                      phase === 1 ? '竞拍阶段' :
-                        phase === 2 ? '揭示阶段' :
-                          '已结束'}
+            {/* 左侧拍卖状态信息 */}
+            <div className="p-8 border-b border-slate-700/50 flex-1">
+              <h3 className="text-xl font-semibold text-white mb-6 flex items-center">
+                <span className="mr-3">📊</span> 拍卖状态
+              </h3>
+              <div className="space-y-4">
+                <div className="flex justify-between items-center py-2">
+                  <span className="text-slate-400 text-base">当前阶段</span>
+                  <span className={`font-bold ${phaseInfo.color} px-4 py-2 rounded-full bg-white/5 border border-current/30 text-sm`}>
+                    {phaseInfo.text}
                   </span>
-                  {timeLeft && (
-                    <span className="text-slate-400">
-                      {phase === 0 ? ' (竞拍开始倒计时: ' :
-                        phase === 1 ? ' (剩余时间: ' :
-                          phase === 2 ? ' (揭示剩余时间: ' :
-                            ' ('}
-                      {timeLeft})
-                    </span>
-                  )}
-                </p>
+                </div>
+                <div className="flex justify-between items-center py-2">
+                  <span className="text-slate-400 text-base">剩余时间</span>
+                  <span className="text-cyan-400 text-base font-mono font-semibold">{timeLeft}</span>
+                </div>
+                {!connectedAddress && (
+                  <div className="flex justify-between items-center py-2">
+                    <span className="text-slate-400 text-base">钱包状态</span>
+                    <span className="text-red-400 text-sm">未连接</span>
+                  </div>
+                )}
+                {connectedAddress && hasParticipated && (
+                  <div className="flex justify-between items-center py-2">
+                    <span className="text-slate-400 text-base">参与状态</span>
+                    <span className="text-green-400 text-sm">已参与</span>
+                  </div>
+                )}
               </div>
             </div>
 
-            {error ? (
-              <div className="bg-slate-900/70 backdrop-blur-md rounded-xl p-8 text-center border border-red-500 shadow-lg">
-                <div className="text-6xl mb-6 opacity-80">❌</div>
-                <h3 className="text-xl font-semibold mb-4 text-white">出现错误</h3>
-                <p className="text-red-300 mb-6">{error}</p>
-              </div>
-            ) : !connectedAddress ? (
-              <div className="bg-slate-900/70 backdrop-blur-md rounded-xl p-8 text-center border border-slate-700 shadow-lg">
-                <div className="text-6xl mb-6 opacity-80">🔒</div>
-                <h3 className="text-xl font-semibold mb-4 text-white">请连接钱包</h3>
-                <p className="text-slate-300 mb-6">您需要连接以太坊钱包来参与竞拍</p>
-                <button className="btn btn-primary bg-gradient-to-r from-blue-600 to-purple-600 border-0 btn-cyber">
-                  连接钱包
+            {/* 左侧快捷操作 */}
+            <div className="p-6">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+                <span className="mr-2">🚀</span> 快捷操作
+              </h3>
+              <div className="space-y-2">
+                <button
+                  onClick={() => router.push('/my-bids')}
+                  className="btn btn-sm btn-primary w-full"
+                >
+                  我的竞拍记录
+                </button>
+                <button
+                  onClick={() => router.push('/')}
+                  className="btn btn-sm btn-ghost w-full"
+                >
+                  返回首页
                 </button>
               </div>
-            ) : phase === 0 ? (
-              <div className="bg-slate-900/70 backdrop-blur-md rounded-xl p-8 text-center border border-slate-700 shadow-lg scan-container">
-                <div className="scan-line"></div>
-                <div className="text-6xl mb-6 opacity-80 encrypt-icon">⏰</div>
-                <h3 className="text-xl font-semibold mb-4 text-white">拍卖尚未开始</h3>
-                <p className="mb-6 text-slate-300">
-                  竞拍还没有开始，请等待竞拍开始时间到达后再参与。
-                </p>
-                <a
-                  href="/all-auctions"
-                  className="btn btn-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white border-0 glow-on-hover"
-                >
-                  浏览其他拍卖
-                </a>
+            </div>
+          </div>
+
+          {/* 中间主内容区域 */}
+          <div className="flex-1 flex flex-col">
+            {!connectedAddress ? (
+              <div className="flex items-center justify-center h-full p-8">
+                <div className="bg-slate-900/60 backdrop-blur-lg rounded-2xl p-8 border border-slate-700/50 shadow-xl max-w-2xl w-full text-center">
+                  <div className="w-20 h-20 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center mx-auto mb-6 animate-pulse">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                  </div>
+
+                  <h2 className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-purple-400 to-cyan-400 mb-4">
+                    连接钱包参与竞拍
+                  </h2>
+
+                  <p className="text-slate-300 text-lg mb-8 leading-relaxed">
+                    您需要连接以太坊钱包才能参与区块链竞拍。连接后可以安全地提交出价、揭示结果并管理您的竞拍资产。
+                  </p>
+
+                  {/* 功能特性 */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                    <div className="bg-slate-800/50 rounded-lg p-4 border border-blue-500/20">
+                      <div className="text-blue-400 text-2xl mb-2">🔐</div>
+                      <h4 className="font-semibold text-blue-300 mb-1">盲拍机制</h4>
+                      <p className="text-slate-400 text-sm">出价加密保护隐私</p>
+                    </div>
+
+                    <div className="bg-slate-800/50 rounded-lg p-4 border border-purple-500/20">
+                      <div className="text-purple-400 text-2xl mb-2">💰</div>
+                      <h4 className="font-semibold text-purple-300 mb-1">押金保护</h4>
+                      <p className="text-slate-400 text-sm">智能合约管理资金</p>
+                    </div>
+
+                    <div className="bg-slate-800/50 rounded-lg p-4 border border-cyan-500/20">
+                      <div className="text-cyan-400 text-2xl mb-2">⚡</div>
+                      <h4 className="font-semibold text-cyan-300 mb-1">即时交易</h4>
+                      <p className="text-slate-400 text-sm">区块链透明可信</p>
+                    </div>
+                  </div>
+
+                  {/* 连接按钮 */}
+                  <div className="space-y-4">
+                    <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-cyan-600 p-1 rounded-xl">
+                      <button className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-4 px-8 rounded-xl transition-all duration-300 transform hover:scale-[1.02]">
+                        <span className="text-xl mr-3">🦄</span>
+                        连接钱包开始竞拍
+                      </button>
+                    </div>
+
+                    <p className="text-slate-400 text-xs">
+                      点击上方按钮将打开钱包连接选项
+                    </p>
+                  </div>
+                </div>
               </div>
-            ) : phase === 2 ? (
-              <div className="bg-slate-900/70 backdrop-blur-md rounded-xl p-8 text-center border border-slate-700 shadow-lg scan-container">
-                <div className="scan-line"></div>
-                <div className="text-6xl mb-6 opacity-80 encrypt-icon">🔓</div>
-                <h3 className="text-xl font-semibold mb-4 text-white">竞拍阶段已结束</h3>
-                <p className="mb-6 text-slate-300">
-                  竞拍阶段已结束，您现在需要前往揭示页面提交您的真实出价。
-                </p>
-                <a
-                  href={`/reveal?address=${auctionAddress}`}
-                  className="btn btn-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white border-0 glow-on-hover"
-                >
-                  前往揭示页面
-                </a>
-              </div>
-            ) : phase === 3 ? (
-              <div className="bg-slate-900/70 backdrop-blur-md rounded-xl p-8 text-center border border-slate-700 shadow-lg scan-container">
-                <div className="scan-line"></div>
-                <div className="text-6xl mb-6 opacity-80 encrypt-icon">🏁</div>
-                <h3 className="text-xl font-semibold mb-4 text-white">拍卖已结束</h3>
-                <p className="mb-6 text-slate-300">
-                  拍卖已完全结束，您可以查看拍卖结果。
-                </p>
-                <a
-                  href={`/results?address=${auctionAddress}`}
-                  className="btn btn-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white border-0 glow-on-hover"
-                >
-                  查看拍卖结果
-                </a>
+            ) : isWaitingConfirmation ? (
+              <div className="flex items-center justify-center h-full p-8">
+                <div className="bg-gradient-to-br from-blue-900/80 via-indigo-800/70 to-purple-900/80 backdrop-blur-md rounded-2xl border border-blue-500/50 shadow-2xl relative overflow-hidden max-w-4xl w-full">
+                  {/* 背景装饰 */}
+                  <div className="absolute inset-0 bg-[linear-gradient(rgba(59,130,246,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(59,130,246,0.05)_1px,transparent_1px)] bg-[size:20px_20px]"></div>
+
+                  {/* 顶部装饰条 */}
+                  <div className="h-1 bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 animate-pulse"></div>
+
+                  <div className="p-8 relative z-10 text-center">
+                    {/* 等待图标和标题 */}
+                    <div className="mb-8">
+                      <div className="w-20 h-20 mx-auto mb-6 relative">
+                        <div className="absolute inset-0 border-4 border-blue-500/30 rounded-full"></div>
+                        <div className="absolute inset-0 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                        <div className="absolute inset-2 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center">
+                          <span className="text-2xl">⏳</span>
+                        </div>
+                      </div>
+                      <h2 className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 mb-4">
+                        等待交易确认
+                      </h2>
+                      <div className="w-32 h-1 bg-gradient-to-r from-blue-500 to-purple-500 mx-auto rounded-full"></div>
+                    </div>
+
+                    {/* 等待信息卡片 */}
+                    <div className="bg-gradient-to-r from-blue-800/40 to-indigo-800/40 rounded-xl p-6 mb-8 border border-blue-500/30">
+                      <h3 className="text-xl font-semibold text-blue-300 mb-4 flex items-center justify-center">
+                        <span className="mr-2">📡</span> 交易正在处理中
+                      </h3>
+                      <p className="text-blue-100/90 mb-4">
+                        您的出价交易已成功提交到区块链网络，正在等待矿工确认。
+                        这个过程通常需要几秒到几分钟的时间，请耐心等待。
+                      </p>
+
+                      {/* 交易哈希 */}
+                      {txHash && (
+                        <div className="bg-slate-800/60 rounded-lg p-3 border border-blue-500/30 mb-4">
+                          <p className="text-slate-400 text-sm mb-1">交易哈希:</p>
+                          <p className="font-mono text-blue-400 text-sm break-all leading-relaxed">
+                            {txHash}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* 进度指示器 */}
+                      <div className="flex items-center justify-center space-x-4 mt-6">
+                        <div className="flex items-center text-green-300">
+                          <div className="w-3 h-3 bg-green-400 rounded-full mr-2"></div>
+                          <span className="text-sm">交易已提交</span>
+                        </div>
+                        <div className="w-8 h-0.5 bg-blue-500"></div>
+                        <div className="flex items-center text-blue-300">
+                          <div className="w-3 h-3 bg-blue-400 rounded-full mr-2 animate-pulse"></div>
+                          <span className="text-sm">等待确认中</span>
+                        </div>
+                        <div className="w-8 h-0.5 bg-slate-500/50"></div>
+                        <div className="flex items-center text-slate-400">
+                          <div className="w-3 h-3 bg-slate-500 rounded-full mr-2"></div>
+                          <span className="text-sm">完成</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 提醒信息 */}
+                    <div className="bg-gradient-to-r from-amber-900/40 to-yellow-900/40 rounded-xl p-6 mb-8 border border-amber-500/40">
+                      <h4 className="text-lg font-semibold text-amber-300 mb-3 flex items-center justify-center">
+                        <span className="mr-2">💡</span> 温馨提示
+                      </h4>
+                      <div className="text-amber-100/90 text-sm space-y-2">
+                        <div className="flex items-start justify-center">
+                          <span className="text-amber-400 mr-2 mt-1">•</span>
+                          <p>请不要关闭此页面，等待交易确认完成</p>
+                        </div>
+                        <div className="flex items-start justify-center">
+                          <span className="text-amber-400 mr-2 mt-1">•</span>
+                          <p>确认时间取决于网络拥堵程度，请耐心等待</p>
+                        </div>
+                        <div className="flex items-start justify-center">
+                          <span className="text-amber-400 mr-2 mt-1">•</span>
+                          <p>如果长时间未确认，可以在钱包中查看交易状态</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 操作按钮 */}
+                    <div className="space-y-4">
+                      <button
+                        onClick={() => router.push(`/auction/${auctionAddress}`)}
+                        className="btn btn-lg bg-gradient-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 border-0 text-white"
+                      >
+                        <span className="mr-2">🔙</span>
+                        返回拍卖详情
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : hasParticipated ? (
-              <div className="bg-slate-900/70 backdrop-blur-md rounded-xl p-8 text-center border border-slate-700 shadow-lg">
-                <div className="text-6xl mb-6 opacity-80">✅</div>
-                <h3 className="text-xl font-semibold mb-4 text-white">您已参与此拍卖</h3>
-                <p className="text-slate-300 mb-6">您已经成功提交了一个出价，每个用户只能参与一次竞拍。</p>
-                <div className="flex flex-col md:flex-row gap-4 justify-center">
-                  <a
-                    href="/my-bids"
-                    className="btn btn-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white border-0"
-                  >
-                    查看我的竞拍记录
-                  </a>
-                  <a
-                    href="/all-auctions"
-                    className="btn btn-lg bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-700 hover:to-cyan-700 text-white border-0"
-                  >
-                    浏览其他拍卖
-                  </a>
+              <div className="flex items-center justify-center h-full p-8">
+                <div className="bg-gradient-to-br from-green-900/80 via-emerald-800/70 to-teal-900/80 backdrop-blur-md rounded-2xl border border-green-500/50 shadow-2xl relative overflow-hidden max-w-4xl w-full">
+                  {/* 背景装饰 */}
+                  <div className="absolute inset-0 bg-[linear-gradient(rgba(34,197,94,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(34,197,94,0.05)_1px,transparent_1px)] bg-[size:20px_20px]"></div>
+
+                  {/* 顶部装饰条 */}
+                  <div className="h-1 bg-gradient-to-r from-green-500 via-emerald-500 to-teal-500"></div>
+
+                  <div className="p-8 relative z-10 text-center">
+                    {/* 成功图标和标题 */}
+                    <div className="mb-8">
+                      <div className="text-6xl mb-4 animate-float">🎉</div>
+                      <h2 className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-green-400 via-emerald-400 to-teal-400 mb-4">
+                        竞拍提交成功！
+                      </h2>
+                      <div className="w-32 h-1 bg-gradient-to-r from-green-500 to-emerald-500 mx-auto rounded-full"></div>
+                    </div>
+
+                    {/* 成功信息卡片 */}
+                    <div className="bg-gradient-to-r from-green-800/40 to-emerald-800/40 rounded-xl p-6 mb-8 border border-green-500/30">
+                      <h3 className="text-xl font-semibold text-green-300 mb-4 flex items-center justify-center">
+                        <span className="mr-2">🏆</span> 您的出价已成功记录
+                      </h3>
+                      <p className="text-green-100/90 mb-4">
+                        您的出价已经安全地记录在区块链上，现在请耐心等待揭示阶段开始。
+                        在揭示阶段，您需要揭示您的真实出价来参与最终的竞拍结果。
+                      </p>
+
+                      {/* 状态指示器 */}
+                      <div className="flex items-center justify-center space-x-4 mt-6">
+                        <div className="flex items-center text-green-300">
+                          <div className="w-3 h-3 bg-green-400 rounded-full mr-2 animate-pulse"></div>
+                          <span className="text-sm">已提交出价</span>
+                        </div>
+                        <div className="w-8 h-0.5 bg-green-500/50"></div>
+                        <div className="flex items-center text-yellow-300">
+                          <div className="w-3 h-3 bg-yellow-400 rounded-full mr-2"></div>
+                          <span className="text-sm">等待揭示阶段</span>
+                        </div>
+                        <div className="w-8 h-0.5 bg-slate-500/50"></div>
+                        <div className="flex items-center text-slate-400">
+                          <div className="w-3 h-3 bg-slate-500 rounded-full mr-2"></div>
+                          <span className="text-sm">查看最终结果</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 重要提醒 */}
+                    <div className="bg-gradient-to-r from-amber-900/40 to-orange-900/40 rounded-xl p-6 mb-8 border border-amber-500/40">
+                      <h4 className="text-lg font-semibold text-amber-300 mb-3 flex items-center justify-center">
+                        <span className="mr-2">⚠️</span> 重要提醒
+                      </h4>
+                      <div className="text-amber-100/90 text-sm space-y-2">
+                        <div className="flex items-start justify-center">
+                          <span className="text-amber-400 mr-2 mt-1">•</span>
+                          <p>请务必在揭示阶段开始后及时揭示您的出价</p>
+                        </div>
+                        <div className="flex items-start justify-center">
+                          <span className="text-amber-400 mr-2 mt-1">•</span>
+                          <p>未在规定时间内揭示将导致押金被没收</p>
+                        </div>
+                        <div className="flex items-start justify-center">
+                          <span className="text-amber-400 mr-2 mt-1">•</span>
+                          <p>请保存好您的密钥，揭示时需要用到</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 操作按钮组 */}
+                    <div className="space-y-4">
+                      <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                        <button
+                          onClick={() => router.push(`/auction/${auctionAddress}`)}
+                          className="btn btn-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 border-0 flex-1 sm:flex-none transform hover:scale-105 transition-all duration-300 shadow-lg"
+                        >
+                          <span className="mr-2">🔍</span>
+                          返回拍卖详情
+                        </button>
+                        <button
+                          onClick={() => router.push('/my-bids')}
+                          className="btn btn-lg bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-700 hover:to-cyan-700 border-0 flex-1 sm:flex-none transform hover:scale-105 transition-all duration-300 shadow-lg"
+                        >
+                          <span className="mr-2">📋</span>
+                          查看我的竞拍记录
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : phase !== null && phase !== 1 ? (
+              <div className="flex items-center justify-center h-full p-8">
+                <div className="bg-gradient-to-br from-yellow-900/80 via-amber-800/70 to-orange-900/80 backdrop-blur-md rounded-2xl border border-yellow-700/50 shadow-2xl relative overflow-hidden max-w-4xl w-full">
+                  {/* 背景装饰 */}
+                  <div className="absolute inset-0 bg-gradient-to-r from-yellow-600/10 to-orange-600/10 animate-pulse"></div>
+                  <div className="absolute -top-10 -right-10 w-32 h-32 bg-yellow-500/20 rounded-full blur-xl"></div>
+                  <div className="absolute -bottom-10 -left-10 w-24 h-24 bg-orange-500/20 rounded-full blur-xl"></div>
+
+                  <div className="relative z-10 text-center p-8">
+                    <div className="text-6xl mb-6 opacity-80 animate-float">⏱️</div>
+                    <h3 className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-orange-400 mb-4">
+                      当前无法出价
+                    </h3>
+                    <p className="mt-4 text-slate-300 text-lg mb-8 max-w-lg mx-auto">
+                      {phase === 0 ? "拍卖尚未开始，请耐心等待竞拍阶段开始。" : "竞拍阶段已结束，正在等待揭示阶段开始。"}
+                    </p>
+
+                    {/* 时间显示 */}
+                    <div className="bg-slate-800/50 rounded-xl p-6 mb-8 border border-yellow-600/30">
+                      <div className="grid grid-cols-1 gap-4">
+                        <div className="text-center">
+                          <p className="text-slate-400 text-sm mb-2">
+                            {phase === 0 ? "距离竞拍开始" : "距离下一阶段"}
+                          </p>
+                          <p className="text-5xl font-mono text-cyan-400 font-bold glow-text">
+                            {timeLeft}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                      <button
+                        onClick={() => router.push(`/auction/${auctionAddress}`)}
+                        className="btn btn-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white border-0 shadow-lg transform hover:scale-105 transition-all duration-300"
+                      >
+                        返回拍卖详情
+                      </button>
+                      <button
+                        onClick={() => router.push('/my-bids')}
+                        className="btn btn-lg bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-700 hover:to-cyan-700 text-white border-0 shadow-lg transform hover:scale-105 transition-all duration-300"
+                      >
+                        我的竞拍记录
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             ) : (
-              <div>
-                {/* 竞拍说明 */}
-                <div className="bg-slate-800/70 backdrop-blur-md rounded-xl p-5 mb-6 border border-slate-700 shadow-md">
-                  <h2 className="text-xl font-semibold mb-3 text-white flex items-center">
-                    <span className="encrypt-icon mr-2">🔐</span> 盲拍说明
+              <div className="bg-slate-900/60 backdrop-blur-lg p-8 h-full overflow-y-auto">
+                <div className="text-center mb-8">
+                  <h2 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-purple-400 to-cyan-400 mb-2">
+                    提交出价
                   </h2>
-                  <ul className="list-disc pl-5 space-y-2 text-slate-300">
-                    <li>在盲拍中，您的出价会被加密，其他人无法知道您的实际出价金额</li>
-                    <li>为了保证您的出价有效，您需要发送<span className="font-semibold text-blue-300">大于等于</span>您出价金额的ETH作为押金</li>
-                    <li>如果您中标，您的出价金额将转给受益人；如果未中标，您可以取回押金</li>
-                    <li><span className="font-semibold text-yellow-400">重要：在揭示阶段，您必须提供正确的出价信息，否则将无法取回押金</span></li>
-                  </ul>
+                  <div className="w-24 h-1 bg-gradient-to-r from-blue-500 to-purple-500 mx-auto rounded-full"></div>
                 </div>
 
-                {/* 出价表单 */}
-                <div className="bg-slate-900/70 backdrop-blur-md rounded-xl overflow-hidden border border-slate-700 shadow-lg mb-6 transform-none" style={{ transform: 'none' }}>
-                  <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-4">
-                    <h3 className="font-semibold text-white text-lg">提交出价</h3>
-                    {auctionMetadata && (
-                      <p className="text-blue-100 text-sm mt-1">
-                        {auctionMetadata.name} - 最低出价: <span className="font-semibold text-yellow-300">{minPrice} ETH</span>
-                      </p>
-                    )}
+                <div className="space-y-6 max-w-2xl mx-auto">
+                  {/* 出价金额 */}
+                  <div className="space-y-3">
+                    <label className="flex items-center text-lg font-semibold text-white">
+                      <span className="w-8 h-8 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full flex items-center justify-center text-sm font-bold mr-3">1</span>
+                      出价金额
+                    </label>
+                    <div className="relative group">
+                      <input
+                        type="text"
+                        placeholder={`最低出价: ${minPrice} ETH`}
+                        className="w-full h-14 bg-slate-800/60 border-2 border-slate-600/50 rounded-xl px-4 pr-16 text-white placeholder-slate-400 focus:border-blue-500/70 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all duration-300 group-hover:border-slate-500/70"
+                        value={value}
+                        onChange={e => setValue(e.target.value)}
+                      />
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 font-semibold">ETH</span>
+                    </div>
+                    <p className="text-xs text-slate-400 flex items-center">
+                      <span className="w-2 h-2 bg-green-400 rounded-full mr-2"></span>
+                      最低出价: {minPrice} ETH
+                    </p>
                   </div>
 
-                  <div className="p-6 space-y-6">
-                    {/* 最低出价提醒 */}
-                    {minPrice && parseFloat(minPrice) > 0 && (
-                      <div className="bg-amber-600/20 border border-amber-500/50 rounded-lg p-4">
-                        <div className="flex items-center space-x-2">
-                          <span className="text-amber-400">⚠️</span>
-                          <span className="text-amber-200 font-medium">出价要求</span>
-                        </div>
-                        <div className="mt-2 text-amber-100 text-sm space-y-1">
-                          <p>• 您的出价金额必须 ≥ <span className="font-semibold text-yellow-300">{minPrice} ETH</span></p>
-                          <p>• 押金必须 ≥ 出价金额（真实出价）或 ≥ 最低出价（假出价）</p>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 出价金额 */}
-                    <div className="space-y-2">
-                      <label className="text-white flex items-center">
-                        <span className="mystery-icon mr-2">❓</span>
-                        出价金额 (ETH)
-                        {minPrice && parseFloat(minPrice) > 0 && (
-                          <span className="ml-2 text-yellow-400 text-sm">
-                            (最低: {minPrice} ETH)
-                          </span>
-                        )}
-                      </label>
-                      <input
-                        type="number"
-                        step="0.001"
-                        min={minPrice || "0"}
-                        value={value}
-                        onChange={(e) => setValue(e.target.value)}
-                        className={`w-full px-4 py-2 bg-slate-800/60 border rounded-lg text-white focus:outline-none focus:ring-2 focus:border-transparent ${minPrice && parseFloat(value) > 0 && parseFloat(value) < parseFloat(minPrice)
-                          ? 'border-red-500 focus:ring-red-500'
-                          : 'border-slate-600 focus:ring-blue-500'
-                          }`}
-                        placeholder={`例如: ${minPrice && parseFloat(minPrice) > 0 ? minPrice : '0.001'}`}
-                      />
-                      {minPrice && parseFloat(value) > 0 && parseFloat(value) < parseFloat(minPrice) && (
-                        <p className="text-red-400 text-sm">
-                          出价金额必须大于等于最低出价 {minPrice} ETH
-                        </p>
-                      )}
-                    </div>
-
-                    {/* 是否为假出价 */}
-                    <div className="space-y-2">
-                      <label className="text-white flex items-center">
-                        <span className="mystery-icon mr-2">❓</span>
-                        出价类型
-                      </label>
-                      <div className="flex items-center space-x-4">
-                        <label className="inline-flex items-center">
-                          <input
-                            type="radio"
-                            className="form-radio text-blue-500"
-                            name="bidType"
-                            checked={!fake}
-                            onChange={() => setFake(false)}
-                          />
-                          <span className="ml-2 text-slate-300">真实出价</span>
-                        </label>
-                        <label className="inline-flex items-center">
-                          <input
-                            type="radio"
-                            className="form-radio text-purple-500"
-                            name="bidType"
-                            checked={fake}
-                            onChange={() => setFake(true)}
-                          />
-                          <span className="ml-2 text-slate-300">假出价（诱饵）</span>
-                        </label>
-                      </div>
-                    </div>
-
-                    {/* 密钥 */}
-                    <div className="space-y-2">
-                      <label className="text-white flex items-center">
-                        <span className="mystery-icon mr-2">❓</span>
-                        密钥
-                      </label>
+                  {/* 虚假出价选项 */}
+                  <div className="bg-gradient-to-r from-slate-800/40 to-slate-700/40 rounded-xl p-4 border border-slate-600/30">
+                    <label className="flex items-start space-x-4 cursor-pointer group">
                       <div className="relative">
                         <input
-                          type="text"
-                          value={secret}
-                          onChange={(e) => setSecret(e.target.value)}
-                          className="w-full px-4 py-2 bg-slate-800/60 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          placeholder="设置一个密钥，揭示时需要使用"
+                          type="checkbox"
+                          className="sr-only"
+                          checked={fake}
+                          onChange={e => setFake(e.target.checked)}
                         />
-                        <button
-                          type="button"
-                          onClick={generateRandomSecret}
-                          className="absolute right-2 top-1/2 transform -translate-y-1/2 px-3 py-1 bg-blue-700/70 hover:bg-blue-600/70 text-blue-100 text-sm rounded-lg transition-colors"
-                        >
-                          随机生成
-                        </button>
+                        <div className={`w-6 h-6 rounded-lg border-2 transition-all duration-300 flex items-center justify-center ${fake
+                          ? 'bg-gradient-to-r from-purple-500 to-pink-500 border-purple-400'
+                          : 'border-slate-500 group-hover:border-slate-400'
+                          }`}>
+                          {fake && (
+                            <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </div>
                       </div>
-                    </div>
-
-                    {/* 押金 */}
-                    <div className="space-y-2">
-                      <label className="text-white flex items-center">
-                        <span className="mystery-icon mr-2">💰</span>
-                        押金 (ETH)
-                        {value && minPrice && (
-                          <span className="ml-2 text-green-400 text-sm">
-                            (需要 ≥ {fake ? minPrice : (parseFloat(value) > 0 ? value : minPrice)} ETH)
-                          </span>
-                        )}
-                      </label>
-                      <input
-                        type="number"
-                        step="0.001"
-                        min={minPrice || "0"}
-                        value={deposit}
-                        onChange={(e) => setDeposit(e.target.value)}
-                        className={`w-full px-4 py-2 bg-slate-800/60 border rounded-lg text-white focus:outline-none focus:ring-2 focus:border-transparent ${
-                          // 验证押金是否符合要求
-                          (() => {
-                            const depositNum = parseFloat(deposit);
-                            const valueNum = parseFloat(value);
-                            const minPriceNum = parseFloat(minPrice || '0');
-
-                            if (depositNum <= 0) return 'border-slate-600 focus:ring-blue-500';
-
-                            // 真实出价：押金 >= 出价金额
-                            if (!fake && depositNum < valueNum) return 'border-red-500 focus:ring-red-500';
-
-                            // 假出价：押金 >= 最低出价
-                            if (fake && depositNum < minPriceNum) return 'border-red-500 focus:ring-red-500';
-
-                            // 所有情况：押金 >= 最低出价
-                            if (depositNum < minPriceNum) return 'border-red-500 focus:ring-red-500';
-
-                            return 'border-green-500 focus:ring-green-500';
-                          })()
-                          }`}
-                        placeholder={`推荐: ${fake ? minPrice : (parseFloat(value) > 0 ? value : minPrice || '0.001')}`}
-                      />
-                      {/* 动态提示 */}
-                      {(() => {
-                        const depositNum = parseFloat(deposit);
-                        const valueNum = parseFloat(value);
-                        const minPriceNum = parseFloat(minPrice || '0');
-
-                        if (depositNum <= 0) {
-                          return (
-                            <p className="text-slate-400 text-sm">
-                              押金用于保证您能够支付承诺的价格
-                            </p>
-                          );
-                        }
-
-                        if (!fake && depositNum < valueNum) {
-                          return (
-                            <p className="text-red-400 text-sm">
-                              真实出价的押金必须 ≥ 出价金额 {value} ETH
-                            </p>
-                          );
-                        }
-
-                        if (fake && depositNum < minPriceNum) {
-                          return (
-                            <p className="text-red-400 text-sm">
-                              假出价的押金至少需要 {minPrice} ETH（最低出价）
-                            </p>
-                          );
-                        }
-
-                        if (depositNum < minPriceNum) {
-                          return (
-                            <p className="text-red-400 text-sm">
-                              押金不能低于最低出价 {minPrice} ETH
-                            </p>
-                          );
-                        }
-
-                        return (
-                          <p className="text-green-400 text-sm">
-                            ✅ 押金金额符合要求
-                          </p>
-                        );
-                      })()}
-                    </div>
-
-                    {/* 加密后的出价 */}
-                    <div className="p-4 bg-slate-800/50 rounded-lg">
-                      <div className="flex justify-between items-center mb-2">
-                        <label className="text-white">加密后的出价</label>
-                        <button
-                          type="button"
-                          onClick={generateBlindedBid}
-                          className="px-3 py-1 bg-blue-700/70 hover:bg-blue-600/70 text-blue-100 text-sm rounded-lg transition-colors"
-                        >
-                          生成加密出价
-                        </button>
-                      </div>
-                      <div className="bg-slate-900/70 p-3 rounded-lg overflow-x-auto">
-                        <p className="font-mono text-sm text-green-400 break-all">
-                          {blindedBid || "点击\"生成加密出价\"按钮生成"}
+                      <div className="flex-1">
+                        <span className="text-lg font-semibold text-white block">这是一个虚假出价</span>
+                        <p className="text-sm text-slate-400 mt-1">
+                          虚假出价用于迷惑对手，押金需大于等于最低价 {minPrice} ETH
                         </p>
                       </div>
+                    </label>
+                  </div>
+
+                  {/* 密钥输入 */}
+                  <div className="space-y-3">
+                    <label className="flex items-center text-lg font-semibold text-white">
+                      <span className="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-sm font-bold mr-3">2</span>
+                      安全密钥
+                    </label>
+                    <div className="flex space-x-3">
+                      <div className="flex-1 relative group">
+                        <input
+                          type="text"
+                          placeholder="输入或生成安全密钥"
+                          className="w-full h-14 bg-slate-800/60 border-2 border-slate-600/50 rounded-xl px-4 text-white placeholder-slate-400 focus:border-purple-500/70 focus:outline-none focus:ring-2 focus:ring-purple-500/20 transition-all duration-300 group-hover:border-slate-500/70"
+                          value={secret}
+                          onChange={e => setSecret(e.target.value)}
+                        />
+                      </div>
+                      <button
+                        className="h-14 px-6 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-semibold rounded-xl transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-purple-500/25"
+                        onClick={generateRandomSecret}
+                      >
+                        随机生成
+                      </button>
                     </div>
+                    <p className="text-xs text-slate-400 flex items-center">
+                      <span className="w-2 h-2 bg-purple-400 rounded-full mr-2"></span>
+                      请务必保存好密钥，揭示阶段需要使用
+                    </p>
+                  </div>
+
+                  {/* 生成哈希按钮 */}
+                  <div className="relative">
+                    <button
+                      className="w-full h-16 bg-gradient-to-r from-blue-600 via-purple-600 to-cyan-600 hover:from-blue-700 hover:via-purple-700 hover:to-cyan-700 text-white text-lg font-bold rounded-xl transition-all duration-300 transform hover:scale-[1.02] shadow-xl hover:shadow-2xl relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                      onClick={generateBlindedBid}
+                      disabled={isCalculating || !value || !secret}
+                    >
+                      <div className="relative z-10 flex items-center justify-center">
+                        {isCalculating ? (
+                          <>
+                            <div className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin mr-3"></div>
+                            计算中...
+                          </>
+                        ) : (
+                          <>
+                            <span className="mr-3 text-xl">🔐</span>
+                            生成盲拍哈希
+                          </>
+                        )}
+                      </div>
+                    </button>
+                  </div>
+
+                  {/* 生成的哈希显示 */}
+                  {blindedBid && (
+                    <div className="relative">
+                      <div className="bg-gradient-to-r from-green-900/40 to-emerald-900/40 rounded-xl p-4 border-2 border-green-500/40 shadow-lg animate-fadeIn">
+                        <div className="flex items-center mb-2">
+                          <span className="w-2 h-2 bg-green-400 rounded-full mr-2 animate-pulse"></span>
+                          <span className="text-green-300 font-semibold">生成的哈希:</span>
+                        </div>
+                        <div className="bg-slate-800/60 rounded-lg p-3 border border-green-500/30">
+                          <p className="font-mono text-green-400 text-sm break-all leading-relaxed">
+                            {blindedBid}
+                          </p>
+                        </div>
+                        <div className="flex items-center mt-2 text-xs text-green-200/80">
+                          <svg className="w-4 h-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          哈希生成成功，可以继续设置押金
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 押金设置 */}
+                  <div className="space-y-3">
+                    <label className="flex items-center text-lg font-semibold text-white">
+                      <span className="w-8 h-8 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full flex items-center justify-center text-sm font-bold mr-3">3</span>
+                      押金金额
+                    </label>
+                    <div className="relative group">
+                      <input
+                        type="text"
+                        placeholder={fake ? `最低: ${minPrice} ETH` : "必须 >= 出价金额"}
+                        className="w-full h-14 bg-slate-800/60 border-2 border-slate-600/50 rounded-xl px-4 pr-16 text-white placeholder-slate-400 focus:border-cyan-500/70 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 transition-all duration-300 group-hover:border-slate-500/70"
+                        value={deposit}
+                        onChange={e => setDeposit(e.target.value)}
+                      />
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 font-semibold">ETH</span>
+                    </div>
+                    <p className="text-xs text-slate-400 flex items-center">
+                      <span className="w-2 h-2 bg-cyan-400 rounded-full mr-2"></span>
+                      {fake ? `虚假出价押金需≥最低价 ${minPrice} ETH` : "真实出价押金需≥出价金额"}
+                    </p>
                   </div>
 
                   {/* 提交按钮 */}
-                  <div className="p-6 bg-slate-800/30 flex justify-end">
+                  <div className="pt-6 border-t border-slate-700/50">
                     <button
-                      className={`
-                        btn btn-lg px-8 
-                        ${value && secret && deposit ? 'bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-700 hover:to-cyan-700' : 'bg-slate-700'}
-                        text-white border-0 shadow-lg ${value && secret && deposit ? 'glow-on-hover' : ''}
-                      `}
-                      disabled={!value || !secret || !deposit || isSubmitting}
+                      className="w-full h-16 bg-gradient-to-r from-blue-600 via-purple-600 to-cyan-600 hover:from-blue-700 hover:via-purple-700 hover:to-cyan-700 text-white text-xl font-bold rounded-xl transition-all duration-300 transform hover:scale-[1.02] shadow-xl hover:shadow-2xl relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                       onClick={handleBid}
+                      disabled={isSubmitting || !blindedBid || !deposit}
                     >
-                      {isCalculating || isSubmitting ? (
-                        <>
-                          <span className="loading loading-spinner loading-sm mr-2"></span>
-                          {isCalculating ? "计算中..." : "提交中..."}
-                        </>
-                      ) : (
-                        "提交竞拍"
-                      )}
+                      <div className="relative z-10 flex items-center justify-center">
+                        {isSubmitting ? (
+                          <>
+                            <div className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin mr-3"></div>
+                            提交中...
+                          </>
+                        ) : (
+                          <>
+                            <span className="mr-3 text-2xl">🚀</span>
+                            提交出价
+                          </>
+                        )}
+                      </div>
                     </button>
-                  </div>
-                </div>
-
-                {/* 竞拍记录链接 */}
-                <div className="mt-6 bg-blue-900/20 rounded-xl p-5 border border-blue-800/40 shadow-inner">
-                  <div className="flex items-center justify-between">
-                    <p className="text-slate-300">
-                      查看您的所有竞拍记录，并在揭示阶段准备好揭示信息
-                    </p>
-                    <a href="/my-bids" className="btn btn-sm bg-blue-700 hover:bg-blue-600 text-white border-0 glow-on-hover">
-                      我的竞拍记录
-                    </a>
                   </div>
                 </div>
               </div>
             )}
+          </div>
 
-            {/* 导航链接 */}
-            <div className="mt-8 flex justify-center space-x-4">
-              <a href="/" className="text-slate-400 hover:text-blue-400 transition-colors">
-                返回首页
-              </a>
-              <a href="/my-bids" className="text-slate-400 hover:text-purple-400 transition-colors">
-                我的竞拍记录
-              </a>
-              <a href="/reveal" className="text-slate-400 hover:text-cyan-400 transition-colors">
-                揭示页面
-              </a>
+          {/* 右侧边栏 */}
+          <div className="w-80 bg-slate-900/60 backdrop-blur-lg border-l border-slate-700/50 flex flex-col">
+            {/* 竞拍进度 */}
+            <div className="p-6 border-b border-slate-700/50">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+                <span className="mr-2">📋</span> 竞拍进度
+              </h3>
+              <div className="space-y-3">
+                <div className={`flex items-center p-3 rounded-lg transition-all duration-300 ${(value || hasParticipated) ? 'bg-green-500/20 border border-green-500/40' : 'bg-slate-800/40 border border-slate-600/30'}`}>
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold mr-3 transition-colors ${(value || hasParticipated) ? 'bg-green-500 text-white' : 'bg-slate-600 text-slate-300'}`}>
+                    {(value || hasParticipated) ? '✓' : '1'}
+                  </div>
+                  <span className={`font-medium text-sm ${(value || hasParticipated) ? 'text-green-300' : 'text-slate-300'}`}>
+                    设置出价金额
+                  </span>
+                </div>
+
+                <div className={`flex items-center p-3 rounded-lg transition-all duration-300 ${(secret || hasParticipated) ? 'bg-green-500/20 border border-green-500/40' : 'bg-slate-800/40 border border-slate-600/30'}`}>
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold mr-3 transition-colors ${(secret || hasParticipated) ? 'bg-green-500 text-white' : 'bg-slate-600 text-slate-300'}`}>
+                    {(secret || hasParticipated) ? '✓' : '2'}
+                  </div>
+                  <span className={`font-medium text-sm ${(secret || hasParticipated) ? 'text-green-300' : 'text-slate-300'}`}>
+                    生成安全密钥
+                  </span>
+                </div>
+
+                <div className={`flex items-center p-3 rounded-lg transition-all duration-300 ${(blindedBid || hasParticipated) ? 'bg-green-500/20 border border-green-500/40' : 'bg-slate-800/40 border border-slate-600/30'}`}>
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold mr-3 transition-colors ${(blindedBid || hasParticipated) ? 'bg-green-500 text-white' : 'bg-slate-600 text-slate-300'}`}>
+                    {(blindedBid || hasParticipated) ? '✓' : '3'}
+                  </div>
+                  <span className={`font-medium text-sm ${(blindedBid || hasParticipated) ? 'text-green-300' : 'text-slate-300'}`}>
+                    生成盲拍哈希
+                  </span>
+                </div>
+
+                <div className={`flex items-center p-3 rounded-lg transition-all duration-300 ${(deposit || hasParticipated) ? 'bg-green-500/20 border border-green-500/40' : 'bg-slate-800/40 border border-slate-600/30'}`}>
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold mr-3 transition-colors ${(deposit || hasParticipated) ? 'bg-green-500 text-white' : 'bg-slate-600 text-slate-300'}`}>
+                    {(deposit || hasParticipated) ? '✓' : '4'}
+                  </div>
+                  <span className={`font-medium text-sm ${(deposit || hasParticipated) ? 'text-green-300' : 'text-slate-300'}`}>
+                    设置押金金额
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* 快速操作 */}
+            <div className="p-6 border-b border-slate-700/50">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+                <span className="mr-2">⚡</span> 快速操作
+              </h3>
+              {hasParticipated ? (
+                <div className="bg-green-900/30 border border-green-500/30 rounded-lg p-4 text-center">
+                  <div className="text-green-400 text-2xl mb-2">✅</div>
+                  <p className="text-green-300 font-semibold text-sm mb-1">竞拍已完成</p>
+                  <p className="text-green-200/80 text-xs">您已成功参与此次竞拍</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <button
+                    onClick={() => setValue(minPrice)}
+                    className="w-full p-3 bg-slate-800/40 hover:bg-slate-700/60 border border-slate-600/30 hover:border-indigo-500/50 rounded-lg text-slate-300 hover:text-white transition-all duration-300 text-sm"
+                  >
+                    使用最低出价 ({minPrice} ETH)
+                  </button>
+
+                  <button
+                    onClick={() => setDeposit(value || minPrice)}
+                    disabled={!value}
+                    className="w-full p-3 bg-slate-800/40 hover:bg-slate-700/60 border border-slate-600/30 hover:border-purple-500/50 rounded-lg text-slate-300 hover:text-white transition-all duration-300 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    押金等于出价金额
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* 竞拍小贴士 */}
+            <div className="p-6 flex-1">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+                <span className="mr-2">💡</span> 竞拍小贴士
+              </h3>
+              <div className="space-y-3 text-sm">
+                <div className="flex items-start">
+                  <span className="text-green-400 mr-2 mt-1">•</span>
+                  <p className="text-slate-300">使用虚假出价可以迷惑对手，增加获胜概率</p>
+                </div>
+                <div className="flex items-start">
+                  <span className="text-green-400 mr-2 mt-1">•</span>
+                  <p className="text-slate-300">押金设置合理，既要保证有效又要控制风险</p>
+                </div>
+                <div className="flex items-start">
+                  <span className="text-green-400 mr-2 mt-1">•</span>
+                  <p className="text-slate-300">密钥请务必备份，丢失将无法揭示出价</p>
+                </div>
+                <div className="flex items-start">
+                  <span className="text-blue-400 mr-2 mt-1">•</span>
+                  <p className="text-slate-300">盲拍机制确保出价隐私，他人无法获知您的真实出价</p>
+                </div>
+                <div className="flex items-start">
+                  <span className="text-purple-400 mr-2 mt-1">•</span>
+                  <p className="text-slate-300">在揭示阶段必须及时揭示出价，否则押金被没收</p>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
+
+      {/* 添加一些自定义CSS */}
+      <style jsx global>{`
+        .glow-text {
+          text-shadow: 0 0 10px rgba(66, 153, 225, 0.5), 0 0 20px rgba(66, 153, 225, 0.3);
+        }
+        
+        @keyframes pulse-border {
+          0%, 100% { border-color: rgba(102, 0, 255, 0.3); }
+          50% { border-color: rgba(102, 0, 255, 0.6); }
+        }
+        
+        .neon-text {
+          text-shadow: 0 0 5px rgba(102, 0, 255, 0.8), 0 0 20px rgba(102, 0, 255, 0.5);
+        }
+
+        @keyframes fadeIn {
+          from { 
+            opacity: 0; 
+            transform: translateY(10px) scale(0.95); 
+          }
+          to { 
+            opacity: 1; 
+            transform: translateY(0) scale(1); 
+          }
+        }
+        
+        .animate-fadeIn {
+          animation: fadeIn 0.5s ease-out forwards;
+        }
+
+        @keyframes gradientShift {
+          0%, 100% { background-position: 0% 50%; }
+          50% { background-position: 100% 50%; }
+        }
+
+        .animate-gradient {
+          background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+          background-size: 400% 400%;
+          animation: gradientShift 4s ease infinite;
+        }
+
+        .group:hover .group-hover\\:scale-110 {
+          transform: scale(1.1);
+        }
+
+        .group:hover .group-hover\\:rotate-3 {
+          transform: rotate(3deg);
+        }
+
+        @keyframes float {
+          0%, 100% { transform: translateY(0px); }
+          50% { transform: translateY(-10px); }
+        }
+
+        .animate-float {
+          animation: float 3s ease-in-out infinite;
+        }
+
+        .border-gradient {
+          border: 2px solid transparent;
+          background: linear-gradient(45deg, rgba(59, 130, 246, 0.3), rgba(147, 51, 234, 0.3)) border-box;
+          mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+          mask-composite: exclude;
+        }
+      `}</style>
+    </>
   );
 } 

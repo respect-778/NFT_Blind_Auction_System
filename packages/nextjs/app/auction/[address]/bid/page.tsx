@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
+import { useParams } from 'next/navigation';
 import { useScaffoldContract } from "~~/hooks/scaffold-eth/useScaffoldContract";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth/useScaffoldReadContract";
 import { useScaffoldWriteContract } from "~~/hooks/scaffold-eth/useScaffoldWriteContract";
@@ -10,6 +11,8 @@ import { notification } from "~~/utils/scaffold-eth";
 
 export default function BidPage() {
   const { address: connectedAddress } = useAccount();
+  const params = useParams();
+  const auctionAddress = params?.address as string;
   const [value, setValue] = useState<string>('0.1');
   const [fake, setFake] = useState<boolean>(false);
   const [secret, setSecret] = useState<string>('');
@@ -24,38 +27,69 @@ export default function BidPage() {
     contractName: "BlindAuction",
   });
 
-  // 读取合约状态
-  const { data: biddingTimeLeft } = useScaffoldReadContract({
-    contractName: "BlindAuction",
-    functionName: "biddingTimeLeft",
-  });
-
-  const { data: currentPhase } = useScaffoldReadContract({
-    contractName: "BlindAuction",
-    functionName: "getAuctionPhase",
-  });
-
+  // 读取合约状态 - 使用前端时间计算状态
   const { data: biddingEnd } = useScaffoldReadContract({
     contractName: "BlindAuction",
     functionName: "biddingEnd",
   });
 
-  // 计算时间
-  useEffect(() => {
-    if (biddingTimeLeft !== undefined) {
-      const hours = Math.floor(Number(biddingTimeLeft) / 3600);
-      const minutes = Math.floor((Number(biddingTimeLeft) % 3600) / 60);
-      const seconds = Number(biddingTimeLeft) % 60;
-      setTimeLeft(`${hours}小时 ${minutes}分钟 ${seconds}秒`);
-    }
-  }, [biddingTimeLeft]);
+  const { data: revealEnd } = useScaffoldReadContract({
+    contractName: "BlindAuction",
+    functionName: "revealEnd",
+  });
 
-  // 设置当前阶段
+  const { data: biddingStart } = useScaffoldReadContract({
+    contractName: "BlindAuction",
+    functionName: "biddingStart",
+  });
+
+  // 🔧 修复：使用前端时间计算阶段和剩余时间
   useEffect(() => {
-    if (currentPhase !== undefined) {
-      setPhase(Number(currentPhase));
-    }
-  }, [currentPhase]);
+    const updateStatus = () => {
+      if (!biddingEnd || !revealEnd || !biddingStart) return;
+
+      const currentTime = Math.floor(Date.now() / 1000);
+      const biddingEndTime = Number(biddingEnd);
+      const revealEndTime = Number(revealEnd);
+      const biddingStartTime = Number(biddingStart);
+
+      let currentPhase = 0;
+      let timeLeftText = "";
+
+      if (currentTime >= revealEndTime) {
+        currentPhase = 2; // 已结束
+        timeLeftText = "拍卖已结束";
+      } else if (currentTime >= biddingEndTime) {
+        currentPhase = 1; // 揭示阶段
+        const remaining = revealEndTime - currentTime;
+        const hours = Math.floor(remaining / 3600);
+        const minutes = Math.floor((remaining % 3600) / 60);
+        const seconds = remaining % 60;
+        timeLeftText = `揭示阶段 ${hours}小时 ${minutes}分钟 ${seconds}秒`;
+      } else if (currentTime >= biddingStartTime) {
+        currentPhase = 0; // 竞拍阶段
+        const remaining = biddingEndTime - currentTime;
+        const hours = Math.floor(remaining / 3600);
+        const minutes = Math.floor((remaining % 3600) / 60);
+        const seconds = remaining % 60;
+        timeLeftText = `${hours}小时 ${minutes}分钟 ${seconds}秒`;
+      } else {
+        currentPhase = -1; // 未开始
+        const remaining = biddingStartTime - currentTime;
+        const hours = Math.floor(remaining / 3600);
+        const minutes = Math.floor((remaining % 3600) / 60);
+        const seconds = remaining % 60;
+        timeLeftText = `竞拍将在 ${hours}小时 ${minutes}分钟 ${seconds}秒 后开始`;
+      }
+
+      setPhase(currentPhase);
+      setTimeLeft(timeLeftText);
+    };
+
+    updateStatus();
+    const interval = setInterval(updateStatus, 1000);
+    return () => clearInterval(interval);
+  }, [biddingEnd, revealEnd, biddingStart]);
 
   // 生成盲拍哈希
   const generateBlindedBid = async () => {
@@ -127,14 +161,16 @@ export default function BidPage() {
         secret,
         blindedBid,
         deposit,
-        timestamp: Date.now(),
-        contractIndex: contractBidCount // 记录此投标在合约中的索引位置
+        timestamp: Math.floor(Date.now() / 1000), // 使用秒级时间戳，与合约保持一致
+        contractIndex: contractBidCount, // 记录此投标在合约中的索引位置
+        auctionAddress: auctionAddress || "unknown" // 🔧 关键修复：添加拍卖地址
       };
 
-      // 获取现有的出价记录
-      const existingBids = JSON.parse(localStorage.getItem(`bids_${connectedAddress}`) || '[]');
+      // 🔧 使用标准化地址格式
+      const normalizedAddress = connectedAddress!.toLowerCase();
+      const existingBids = JSON.parse(localStorage.getItem(`bids_${normalizedAddress}`) || '[]');
       existingBids.push(bidInfo);
-      localStorage.setItem(`bids_${connectedAddress}`, JSON.stringify(existingBids));
+      localStorage.setItem(`bids_${normalizedAddress}`, JSON.stringify(existingBids));
 
       // 重置表单
       setValue('0.1');

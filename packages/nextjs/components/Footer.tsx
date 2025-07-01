@@ -20,13 +20,13 @@ export const Footer = () => {
           <div className="flex flex-col md:flex-row gap-2 pointer-events-auto">
             {nativeCurrencyPrice > 0 && (
               <div>
-                <div className="btn bg-gradient-to-r from-blue-800 to-blue-900 border-blue-700 btn-sm font-normal gap-1 cursor-auto text-blue-100">
+                <div className="btn btn-primary btn-sm font-normal gap-1 cursor-auto">
                   <CurrencyDollarIcon className="h-4 w-4" />
                   <span>{nativeCurrencyPrice}</span>
                 </div>
               </div>
             )}
-            <a href="/blockexplorer" className="btn bg-gradient-to-r from-blue-800 to-blue-900 border-blue-700 btn-sm font-normal gap-1 text-blue-100 hover:from-blue-700 hover:to-blue-800 transition-all duration-300">
+            <a href="/blockexplorer" className="btn btn-primary btn-sm font-normal gap-1 hover:opacity-80 transition-all duration-300">
               <MagnifyingGlassIcon className="h-4 w-4" />
               <span>区块浏览器</span>
             </a>

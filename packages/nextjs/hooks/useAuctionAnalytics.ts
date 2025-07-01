@@ -53,6 +53,7 @@ export const useAuctionAnalytics = () => {
   const publicClient = usePublicClient();
   const { data: factoryContractData } = useDeployedContractInfo("BlindAuctionFactory");
   const { data: blindAuctionInfo } = useDeployedContractInfo("BlindAuction");
+  const { data: nftContractData } = useDeployedContractInfo("AuctionNFT");
 
   // 保存数据到缓存
   const setCachedData = useCallback((data: AuctionAnalyticsData, blockNumber: bigint) => {
@@ -98,7 +99,7 @@ export const useAuctionAnalytics = () => {
   }, []);
 
   const fetchAnalyticsData = useCallback(async () => {
-    if (!factoryContractData || !blindAuctionInfo || !publicClient) return;
+    if (!factoryContractData || !blindAuctionInfo || !publicClient || !nftContractData) return;
 
     try {
       setLoading(true);
@@ -109,21 +110,51 @@ export const useAuctionAnalytics = () => {
       const currentBlock = await publicClient.getBlockNumber();
 
       if (cachedData && BigInt(cachedData.blockNumber) === currentBlock) {
-        console.log('🎯 使用缓存数据');
+        console.log('🎯 数据分析使用缓存数据');
         setAnalyticsData(cachedData.data);
         setLoading(false);
         return;
       }
 
-      // 获取所有拍卖创建事件
-      const logs = await publicClient.getContractEvents({
+      // 🔧 修复：使用与首页相同的方法获取拍卖地址
+
+      // 获取拍卖总数
+      const count = await publicClient.readContract({
         address: factoryContractData.address,
         abi: factoryContractData.abi,
-        eventName: 'AuctionCreated',
-        fromBlock: BigInt(0),
-      });
+        functionName: "getAuctionCount",
+      }) as bigint;
 
-      console.log('🔍 找到拍卖数量:', logs.length);
+      if (count === 0n) {
+        // 如果没有拍卖，返回空数据
+        const emptyData: AuctionAnalyticsData = {
+          totalAuctions: 0,
+          totalVolume: '0',
+          averagePrice: '0',
+          activeAuctions: 0,
+          completedAuctions: 0,
+          successfulAuctions: 0,
+          totalParticipants: 0,
+          categoryData: {},
+          priceHistory: [],
+          topBidders: [],
+          dailyStats: [],
+          monthlyGrowth: 0,
+          averageParticipantsPerAuction: 0,
+          successRate: 0
+        };
+        setAnalyticsData(emptyData);
+        setLoading(false);
+        return;
+      }
+
+      // 获取所有拍卖地址
+      const auctionAddresses = await publicClient.readContract({
+        address: factoryContractData.address,
+        abi: factoryContractData.abi,
+        functionName: "getAuctions",
+        args: [0n, count],
+      }) as `0x${string}`[];
 
       let totalVolume = BigInt(0);
       let completedAuctions = 0;
@@ -136,19 +167,10 @@ export const useAuctionAnalytics = () => {
       const dailyStatsMap: { [key: string]: { auctions: number; volume: number } } = {};
 
       // 批量获取拍卖数据以提高性能
-      const auctionPromises = logs.map(async (log, index) => {
-        if (!log.args) return null;
-
-        const auctionAddress = log.args.auctionAddress as `0x${string}`;
-
+      const auctionPromises = auctionAddresses.map(async (auctionAddress, index) => {
         try {
-          // 获取拍卖基本信息
-          const [phase, highestBid, highestBidder, biddingEnd, revealEnd, ended] = await Promise.all([
-            publicClient.readContract({
-              address: auctionAddress,
-              abi: blindAuctionInfo.abi,
-              functionName: 'getAuctionPhase',
-            }),
+          // 🔧 修复：获取拍卖基本信息，使用与首页相同的逻辑
+          const [highestBid, highestBidder, biddingEnd, revealEnd, biddingStart, ended] = await Promise.all([
             publicClient.readContract({
               address: auctionAddress,
               abi: blindAuctionInfo.abi,
@@ -172,19 +194,133 @@ export const useAuctionAnalytics = () => {
             publicClient.readContract({
               address: auctionAddress,
               abi: blindAuctionInfo.abi,
+              functionName: 'biddingStart',
+            }),
+            publicClient.readContract({
+              address: auctionAddress,
+              abi: blindAuctionInfo.abi,
               functionName: 'ended',
             }).catch(() => false) // 如果合约没有ended字段，默认为false
           ]);
 
+          // 🔧 修复：使用前端时间计算状态，与其他页面保持一致
+          const currentTime = Math.floor(Date.now() / 1000);
+          const biddingStartTime = Number(biddingStart);
+          const biddingEndTime = Number(biddingEnd);
+          const revealEndTime = Number(revealEnd);
+
+          let status: "未开始" | "竞拍中" | "揭示中" | "已结束" = "竞拍中";
+          let phase = 1; // 默认为竞拍中
+
+          if (currentTime >= revealEndTime || ended) {
+            status = "已结束";
+            phase = 3;
+          } else if (currentTime >= biddingEndTime) {
+            status = "揭示中";
+            phase = 2;
+          } else if (currentTime >= biddingStartTime) {
+            status = "竞拍中";
+            phase = 1;
+          } else {
+            status = "未开始";
+            phase = 0;
+          }
+
+          // 🔧 新增：获取NFT合约数据以准确分类
+          let categoryName = "其他";
+          let auctionName = "未命名拍卖";
+
+          try {
+            // 检查是否为NFT拍卖
+            const isNFTAuction = await publicClient.readContract({
+              address: auctionAddress,
+              abi: blindAuctionInfo.abi,
+              functionName: 'isNFTAuction',
+            }) as boolean;
+
+            if (isNFTAuction) {
+              // 获取NFT Token ID和合约地址
+              const [nftTokenId, nftContractAddress] = await Promise.all([
+                publicClient.readContract({
+                  address: auctionAddress,
+                  abi: blindAuctionInfo.abi,
+                  functionName: 'nftTokenId',
+                }) as Promise<bigint>,
+                publicClient.readContract({
+                  address: auctionAddress,
+                  abi: blindAuctionInfo.abi,
+                  functionName: 'nftContract',
+                }) as Promise<`0x${string}`>
+              ]);
+
+              if (nftContractAddress && nftTokenId > 0n) {
+                try {
+                  // 从NFT合约获取元数据
+                  const nftMetadata = await publicClient.readContract({
+                    address: nftContractAddress,
+                    abi: nftContractData.abi,
+                    functionName: 'nftMetadata',
+                    args: [nftTokenId],
+                  }) as readonly [string, string, string, bigint, `0x${string}`, boolean, `0x${string}`, bigint];
+
+                  const [name, , , , , , , categoryCode] = nftMetadata;
+                  auctionName = name || `NFT #${Number(nftTokenId)}`;
+
+                  // 根据categoryCode映射分类名称
+                  const categoryMapping: { [key: string]: string } = {
+                    '0': '艺术品',
+                    '1': '音乐',
+                    '2': '体育',
+                    '3': '游戏',
+                    '4': '收藏品',
+                    '5': '虚拟世界',
+                    '6': '其他'
+                  };
+                  categoryName = categoryMapping[categoryCode.toString()] || '其他';
+                } catch (nftError) {
+                  console.warn(`获取NFT拍卖 ${auctionAddress} 元数据失败:`, nftError);
+                }
+              }
+            }
+
+            // 🔧 如果NFT数据获取失败，尝试从事件日志获取作为备选方案
+            if (categoryName === "其他" && auctionName === "未命名拍卖") {
+              try {
+                const logs = await publicClient.getContractEvents({
+                  address: factoryContractData.address,
+                  abi: factoryContractData.abi,
+                  eventName: 'AuctionCreated',
+                  args: { auctionAddress: auctionAddress },
+                  fromBlock: BigInt(0),
+                });
+
+                if (logs && logs.length > 0 && logs[0].args) {
+                  const metadataStr = logs[0].args.metadata as string;
+                  if (metadataStr) {
+                    const metadata = JSON.parse(metadataStr);
+                    auctionName = metadata.name || "未命名拍卖";
+                    categoryName = metadata.category || '其他';
+                  }
+                }
+              } catch (e) {
+                console.warn(`从事件日志获取拍卖 ${auctionAddress} 元数据失败:`, e);
+              }
+            }
+          } catch (e) {
+            console.warn(`获取拍卖 ${auctionAddress} 分类信息失败:`, e);
+          }
+
           return {
             address: auctionAddress,
-            phase: Number(phase),
+            phase,
+            status,
             highestBid: BigInt(highestBid || 0),
             highestBidder: highestBidder as string,
-            biddingEnd: Number(biddingEnd),
-            revealEnd: Number(revealEnd),
+            biddingEnd: biddingEndTime,
+            revealEnd: revealEndTime,
             ended: Boolean(ended),
-            metadata: log.args.metadata as string
+            categoryName,
+            auctionName
           };
         } catch (error) {
           console.warn(`获取拍卖 ${auctionAddress} 数据失败:`, error);
@@ -206,8 +342,8 @@ export const useAuctionAnalytics = () => {
         }
         dailyStatsMap[endDate].auctions++; // 统计所有拍卖
 
-        // 统计拍卖状态 - 修改逻辑，阶段3表示已结束，或者ended为true
-        if (auction.phase === 3 || auction.ended) {
+        // 🔧 修复：统计拍卖状态 - 使用新的status字段
+        if (auction.status === "已结束") {
           completedAuctions++;
 
           // 只有当最高出价大于0且有有效的最高竞拍者时，才算成功成交
@@ -216,7 +352,6 @@ export const useAuctionAnalytics = () => {
             auction.highestBidder !== '0x0000000000000000000000000000000000000000') {
             successfulAuctions++;
             totalVolume += auction.highestBid;
-            console.log(`✅ 成功成交: ${formatEther(auction.highestBid)} ETH`);
 
             // 只有成功拍卖才计入成交量
             dailyStatsMap[endDate].volume += parseFloat(formatEther(auction.highestBid));
@@ -232,14 +367,8 @@ export const useAuctionAnalytics = () => {
           activeAuctions++;
         }
 
-        // 解析拍卖元数据
-        try {
-          const metadata = JSON.parse(auction.metadata);
-          const category = metadata.category || '其他';
-          categoryData[category] = (categoryData[category] || 0) + 1;
-        } catch (e) {
-          categoryData['其他'] = (categoryData['其他'] || 0) + 1;
-        }
+        // 使用从NFT合约获取的准确分类数据
+        categoryData[auction.categoryName] = (categoryData[auction.categoryName] || 0) + 1;
 
         // 获取竞拍参与者数据
         try {
@@ -279,10 +408,6 @@ export const useAuctionAnalytics = () => {
         : '0';
 
       const totalVolumeString = formatEther(totalVolume);
-
-      console.log('💰 最终计算:');
-      console.log('- 总成交金额(string):', totalVolumeString);
-      console.log('- 平均价格(string):', averagePrice);
 
       // 计算成功率
       const successRate = completedAuctions > 0
@@ -332,8 +457,8 @@ export const useAuctionAnalytics = () => {
         : 0;
 
       // 计算平均参与者数
-      const averageParticipantsPerAuction = logs.length > 0
-        ? totalParticipants.size / logs.length
+      const averageParticipantsPerAuction = validAuctions.length > 0
+        ? totalParticipants.size / validAuctions.length
         : 0;
 
       // 改进价格历史聚合 - 按日期聚合，使用成交量加权平均
@@ -351,7 +476,7 @@ export const useAuctionAnalytics = () => {
       }, [] as typeof priceHistory);
 
       const finalData: AuctionAnalyticsData = {
-        totalAuctions: logs.length,
+        totalAuctions: validAuctions.length,
         totalVolume: totalVolumeString,
         averagePrice,
         activeAuctions,
@@ -367,12 +492,6 @@ export const useAuctionAnalytics = () => {
         successRate
       };
 
-      console.log('🎯 最终数据对象:', {
-        totalVolume: finalData.totalVolume,
-        averagePrice: finalData.averagePrice,
-        successfulAuctions: finalData.successfulAuctions
-      });
-
       setAnalyticsData(finalData);
       setCachedData(finalData, currentBlock);
 
@@ -382,7 +501,7 @@ export const useAuctionAnalytics = () => {
     } finally {
       setLoading(false);
     }
-  }, [factoryContractData, blindAuctionInfo, publicClient, getCachedData, setCachedData]);
+  }, [factoryContractData, blindAuctionInfo, publicClient, getCachedData, setCachedData, nftContractData]);
 
   useEffect(() => {
     fetchAnalyticsData();

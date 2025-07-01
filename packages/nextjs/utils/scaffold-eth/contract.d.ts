@@ -1,4 +1,4 @@
 /**
  * Contract type for all supported contracts
  */
-export type ContractName = "BlindAuction" | "BlindAuctionFactory"; 
+export type ContractName = "AuctionNFT" | "BlindAuction" | "BlindAuctionFactory"; 

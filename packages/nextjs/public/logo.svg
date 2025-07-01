@@ -1,81 +1,66 @@
 <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- 背景辉光 -->
-  <circle cx="32" cy="32" r="30" fill="url(#radialGlow)" />
+  <!-- 背景圆形 -->
+  <circle cx="32" cy="32" r="30" fill="url(#backgroundGradient)" stroke="url(#borderGradient)" stroke-width="2"/>
   
-  <!-- 外环 -->
-  <circle cx="32" cy="32" r="24" stroke="url(#blueGradient)" stroke-width="2" stroke-dasharray="4 2" stroke-linecap="round">
-    <animateTransform 
-      attributeName="transform" 
-      attributeType="XML" 
-      type="rotate" 
-      from="0 32 32" 
-      to="360 32 32" 
-      dur="30s" 
-      repeatCount="indefinite" />
-  </circle>
+  <!-- NFT方块主体 -->
+  <rect x="22" y="22" width="20" height="20" rx="3" fill="url(#nftGradient)" stroke="#ffffff" stroke-width="1.5" opacity="0.9"/>
   
-  <!-- 内环 -->
-  <circle cx="32" cy="32" r="16" stroke="url(#purpleGradient)" stroke-width="1.5" fill="none" opacity="0.7">
-    <animateTransform 
-      attributeName="transform" 
-      attributeType="XML" 
-      type="rotate" 
-      from="360 32 32" 
-      to="0 32 32" 
-      dur="20s" 
-      repeatCount="indefinite" />
-  </circle>
+  <!-- 盲拍眼罩 -->
+  <ellipse cx="32" cy="26" rx="12" ry="4" fill="url(#maskGradient)"/>
+  <ellipse cx="32" cy="26" rx="10" ry="3" fill="#1f2937" opacity="0.8"/>
   
-  <!-- 中心图形 - 问号 -->
-  <path d="M31 42V40H33V42H31ZM33 36.5C33 35.4 32.5 34.35 31.75 33.6C31 32.85 30 32.5 29 32.5C28 32.5 27 32.85 26.25 33.6C25.5 34.35 25 35.4 25 36.5H23C23 34.95 23.65 33.45 24.75 32.35C25.85 31.25 27.4 30.5 29 30.5C30.6 30.5 32.15 31.25 33.25 32.35C34.35 33.45 35 34.95 35 36.5H33ZM29 27.5C33.15 27.5 37.1 29.1 40.05 32.05C43 35 44.5 38.95 44.5 43H42.5C42.5 39.4 41.1 35.95 38.65 33.5C36.2 31.05 32.75 29.5 29 29.5C25.25 29.5 21.8 31.05 19.35 33.5C16.9 35.95 15.5 39.4 15.5 43H13.5C13.5 38.95 15 35 17.95 32.05C20.9 29.1 24.85 27.5 29 27.5Z" fill="url(#textGradient)" />
+  <!-- 眼罩带子 -->
+  <rect x="18" y="24" width="4" height="4" rx="2" fill="#374151"/>
+  <rect x="42" y="24" width="4" height="4" rx="2" fill="#374151"/>
   
-  <!-- 加密数字装饰 -->
-  <g class="binary" opacity="0.5">
-    <text x="8" y="16" font-family="monospace" font-size="4" fill="#00AAFF">10110</text>
-    <text x="48" y="16" font-family="monospace" font-size="4" fill="#00AAFF">01001</text>
-    <text x="8" y="52" font-family="monospace" font-size="4" fill="#00AAFF">01101</text>
-    <text x="48" y="52" font-family="monospace" font-size="4" fill="#00AAFF">10010</text>
+  <!-- NFT内容装饰 -->
+  <rect x="26" y="30" width="4" height="4" rx="1" fill="#60a5fa" opacity="0.7"/>
+  <rect x="34" y="30" width="4" height="4" rx="1" fill="#a78bfa" opacity="0.7"/>
+  <rect x="26" y="36" width="4" height="4" rx="1" fill="#34d399" opacity="0.7"/>
+  <rect x="34" y="36" width="4" height="4" rx="1" fill="#fbbf24" opacity="0.7"/>
+  
+  <!-- 拍卖锤装饰 -->
+  <g transform="translate(45, 45)">
+    <!-- 锤头 -->
+    <rect x="0" y="2" width="6" height="3" rx="1" fill="#e5e7eb"/>
+    <!-- 锤柄 -->
+    <rect x="2.5" y="5" width="1" height="6" fill="#92400e"/>
+    <!-- 底座 -->
+    <ellipse cx="3" cy="11" rx="2" ry="0.5" fill="#6b7280" opacity="0.5"/>
   </g>
   
-  <!-- 光束特效 -->
-  <path d="M32 8L32 18" stroke="rgba(100, 180, 255, 0.8)" stroke-width="0.5">
-    <animate attributeName="opacity" values="0.2;0.8;0.2" dur="2s" repeatCount="indefinite" />
-  </path>
-  <path d="M32 46L32 56" stroke="rgba(100, 180, 255, 0.8)" stroke-width="0.5">
-    <animate attributeName="opacity" values="0.2;0.8;0.2" dur="2s" repeatCount="indefinite" begin="0.5s" />
-  </path>
-  <path d="M8 32L18 32" stroke="rgba(100, 180, 255, 0.8)" stroke-width="0.5">
-    <animate attributeName="opacity" values="0.2;0.8;0.2" dur="2s" repeatCount="indefinite" begin="0.7s" />
-  </path>
-  <path d="M46 32L56 32" stroke="rgba(100, 180, 255, 0.8)" stroke-width="0.5">
-    <animate attributeName="opacity" values="0.2;0.8;0.2" dur="2s" repeatCount="indefinite" begin="0.2s" />
-  </path>
+  <!-- 区块链装饰点 -->
+  <circle cx="16" cy="16" r="2" fill="#06b6d4" opacity="0.6"/>
+  <circle cx="48" cy="16" r="2" fill="#8b5cf6" opacity="0.6"/>
+  <circle cx="16" cy="48" r="2" fill="#10b981" opacity="0.6"/>
   
   <!-- 渐变定义 -->
   <defs>
-    <radialGradient id="radialGlow" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
-      <stop offset="10%" stop-color="#0C0E3F" />
-      <stop offset="90%" stop-color="#02002A" />
-      <stop offset="100%" stop-color="#000020" />
+    <!-- 背景渐变 -->
+    <radialGradient id="backgroundGradient" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="70%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#020617"/>
     </radialGradient>
     
-    <linearGradient id="blueGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#00AAFF" />
-      <stop offset="100%" stop-color="#0055FF" />
-      <animate attributeName="x1" values="0%;100%;0%" dur="10s" repeatCount="indefinite" />
-      <animate attributeName="y1" values="0%;100%;0%" dur="10s" repeatCount="indefinite" />
+    <!-- 边框渐变 -->
+    <linearGradient id="borderGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="50%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
     </linearGradient>
     
-    <linearGradient id="purpleGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#AA00FF" />
-      <stop offset="100%" stop-color="#5500FF" />
-      <animate attributeName="x2" values="100%;0%;100%" dur="8s" repeatCount="indefinite" />
-      <animate attributeName="y2" values="100%;0%;100%" dur="8s" repeatCount="indefinite" />
+    <!-- NFT方块渐变 -->
+    <linearGradient id="nftGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1f2937"/>
+      <stop offset="50%" stop-color="#374151"/>
+      <stop offset="100%" stop-color="#4b5563"/>
     </linearGradient>
     
-    <linearGradient id="textGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#FFFFFF" />
-      <stop offset="100%" stop-color="#A0CFFF" />
+    <!-- 眼罩渐变 -->
+    <linearGradient id="maskGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#374151"/>
+      <stop offset="100%" stop-color="#111827"/>
     </linearGradient>
   </defs>
 </svg>

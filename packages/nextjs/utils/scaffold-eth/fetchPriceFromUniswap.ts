@@ -2,7 +2,7 @@ import { ChainWithAttributes, getAlchemyHttpUrl } from "./networks";
 import { CurrencyAmount, Token } from "@uniswap/sdk-core";
 import { Pair, Route } from "@uniswap/v2-sdk";
 import { Address, createPublicClient, http, parseAbi } from "viem";
-import { mainnet } from "viem/chains";
+import { hardhat, mainnet } from "viem/chains";
 
 const publicClient = createPublicClient({
   chain: mainnet,
@@ -16,6 +16,13 @@ const ABI = parseAbi([
 ]);
 
 export const fetchPriceFromUniswap = async (targetNetwork: ChainWithAttributes): Promise<number> => {
+  // 如果是本地Hardhat网络，返回一个模拟价格值
+  if (targetNetwork.id === hardhat.id) {
+    console.log("使用本地Hardhat网络，返回模拟ETH价格");
+    return 1800; // 返回一个固定的ETH价格，可以根据需要修改
+  }
+
+  // 对于其他网络，如果不是ETH或未配置原生代币地址，则返回0
   if (
     targetNetwork.nativeCurrency.symbol !== "ETH" &&
     targetNetwork.nativeCurrency.symbol !== "SEP" &&
@@ -23,6 +30,7 @@ export const fetchPriceFromUniswap = async (targetNetwork: ChainWithAttributes):
   ) {
     return 0;
   }
+
   try {
     const DAI = new Token(1, "0x6B175474E89094C44Da98b954EedeAC495271d0F", 18);
     const TOKEN = new Token(
@@ -65,6 +73,7 @@ export const fetchPriceFromUniswap = async (targetNetwork: ChainWithAttributes):
       `useNativeCurrencyPrice - Error fetching ${targetNetwork.nativeCurrency.symbol} price from Uniswap: `,
       error,
     );
-    return 0;
+    // 如果获取失败，也返回一个合理的默认价格
+    return targetNetwork.id === hardhat.id ? 1800 : 0;
   }
 };

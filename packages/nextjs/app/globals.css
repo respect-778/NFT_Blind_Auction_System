@@ -161,3 +161,525 @@ p {
     transform: translateX(100%) translateY(100%) rotate(45deg);
   }
 }
+
+/* 星空背景和流星效果 */
+
+/* 星空容器 */
+.star-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* 星星样式 */
+.star {
+  position: absolute;
+  background-color: #fff;
+  border-radius: 50%;
+  opacity: 0;
+  animation: twinkle 3s infinite ease-in-out;
+}
+
+/* 星星闪烁动画 */
+@keyframes twinkle {
+
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 星线效果 */
+.star-line {
+  position: absolute;
+  background-color: rgba(255, 255, 255, 0.8);
+  border-radius: 50%;
+  width: 2px;
+  height: 2px;
+  box-shadow: 0 0 4px #fff, 0 0 8px #fff;
+  animation: twinkle 3s infinite ease-in-out;
+}
+
+/* 流星效果 */
+.shooting-star {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: linear-gradient(45deg, #ffffff, transparent);
+  border-radius: 50%;
+  filter: drop-shadow(0 0 6px rgba(105, 155, 255, 0.7));
+  top: 0;
+  left: -100px;
+  animation: shooting 45s infinite linear;
+  opacity: 0;
+  z-index: 2;
+}
+
+.shooting-star::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.8), transparent);
+  transform: translateX(-100%);
+}
+
+/* 流星动画 */
+@keyframes shooting {
+  0% {
+    transform: translateX(0) translateY(0) rotate(-45deg);
+    opacity: 1;
+  }
+
+  10% {
+    opacity: 1;
+  }
+
+  15% {
+    opacity: 0;
+  }
+
+  100% {
+    transform: translateX(2000px) translateY(2000px) rotate(-45deg);
+    opacity: 0;
+  }
+}
+
+/* 背景网格效果 */
+.bg-grid-pattern {
+  background-image: linear-gradient(rgba(6, 0, 81, 0.05) 1px,
+      transparent 1px),
+    linear-gradient(90deg, rgba(6, 0, 81, 0.05) 1px, transparent 1px);
+  background-size: 50px 50px;
+  background-position: center center;
+}
+
+/* 霓虹文字效果 */
+.neon-text {
+  text-shadow: 0 0 5px rgba(105, 155, 255, 0.5),
+    0 0 10px rgba(105, 155, 255, 0.3),
+    0 0 15px rgba(105, 155, 255, 0.1);
+  animation: neon-pulse 2s infinite alternate;
+}
+
+@keyframes neon-pulse {
+  from {
+    text-shadow: 0 0 5px rgba(105, 155, 255, 0.5),
+      0 0 10px rgba(105, 155, 255, 0.3),
+      0 0 15px rgba(105, 155, 255, 0.1);
+  }
+
+  to {
+    text-shadow: 0 0 7px rgba(105, 155, 255, 0.6),
+      0 0 14px rgba(105, 155, 255, 0.4),
+      0 0 21px rgba(105, 155, 255, 0.2);
+  }
+}
+
+/* 发光按钮效果 */
+.glow-on-hover {
+  position: relative;
+  overflow: hidden;
+}
+
+.glow-on-hover::after {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(45deg,
+      rgba(255, 255, 255, 0) 0%,
+      rgba(255, 255, 255, 0.1) 50%,
+      rgba(255, 255, 255, 0) 100%);
+  transform: rotate(45deg);
+  animation: glow-sweep 3s infinite;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.glow-on-hover:hover::after {
+  opacity: 1;
+}
+
+@keyframes glow-sweep {
+  0% {
+    transform: rotate(45deg) translateX(-100%);
+  }
+
+  100% {
+    transform: rotate(45deg) translateX(100%);
+  }
+}
+
+/* 3D物品展示样式 */
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+.preserve-3d {
+  transform-style: preserve-3d;
+}
+
+.transform-gpu {
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* 3D旋转动画 */
+@keyframes rotate3d {
+  0% {
+    transform: rotateX(0deg) rotateY(0deg);
+  }
+
+  25% {
+    transform: rotateX(10deg) rotateY(90deg);
+  }
+
+  50% {
+    transform: rotateX(0deg) rotateY(180deg);
+  }
+
+  75% {
+    transform: rotateX(-10deg) rotateY(270deg);
+  }
+
+  100% {
+    transform: rotateX(0deg) rotateY(360deg);
+  }
+}
+
+.animate-rotate3d {
+  animation: rotate3d 8s linear infinite;
+}
+
+/* 粒子效果动画 */
+@keyframes particles {
+  0% {
+    opacity: 0;
+    transform: scale(0);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(0);
+  }
+}
+
+.animate-particles {
+  animation: particles 2s ease-in-out infinite;
+}
+
+/* 光晕效果增强 */
+@keyframes glow-pulse {
+
+  0%,
+  100% {
+    box-shadow: 0 0 20px rgba(255, 193, 7, 0.6),
+      0 0 40px rgba(255, 193, 7, 0.4),
+      0 0 60px rgba(255, 193, 7, 0.2);
+  }
+
+  50% {
+    box-shadow: 0 0 30px rgba(255, 193, 7, 0.8),
+      0 0 60px rgba(255, 193, 7, 0.6),
+      0 0 90px rgba(255, 193, 7, 0.4);
+  }
+}
+
+.glow-effect {
+  animation: glow-pulse 2s ease-in-out infinite;
+}
+
+/* 反射效果 */
+.reflection {
+  position: relative;
+}
+
+.reflection::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  height: 50%;
+  background: linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.1) 0%,
+      transparent 100%);
+  transform: scaleY(-1);
+  opacity: 0.3;
+}
+
+/* 浮动动画 */
+@keyframes float {
+
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* 渐变边框 */
+.gradient-border {
+  position: relative;
+  background: linear-gradient(45deg, #ffc107, #ff9800, #e91e63, #9c27b0);
+  padding: 4px;
+  border-radius: 16px;
+}
+
+.gradient-border-inner {
+  background: rgba(15, 23, 42, 0.9);
+  border-radius: 12px;
+  position: relative;
+  z-index: 1;
+}
+
+/* 星球发散光芒效果 */
+.planet-rays {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.light-ray {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: 0 50%;
+  background: linear-gradient(90deg,
+      rgba(255, 255, 255, 0) 0%,
+      rgba(120, 180, 255, 0.8) 10%,
+      rgba(100, 160, 255, 0.6) 20%,
+      rgba(80, 140, 255, 0.4) 40%,
+      rgba(60, 120, 220, 0.2) 60%,
+      rgba(40, 100, 200, 0.1) 80%,
+      transparent 100%);
+  border-radius: 50px;
+  filter: blur(1px);
+}
+
+/* 主要光芒射线 */
+.main-ray {
+  width: 200px;
+  height: 3px;
+  animation:
+    ray-pulse 4s ease-in-out infinite,
+    ray-extend 8s ease-in-out infinite;
+  box-shadow:
+    0 0 10px rgba(120, 180, 255, 0.6),
+    0 0 20px rgba(100, 160, 255, 0.4),
+    0 0 30px rgba(80, 140, 255, 0.2);
+}
+
+/* 次要光芒射线 */
+.secondary-ray {
+  width: 120px;
+  height: 2px;
+  animation:
+    ray-pulse 3s ease-in-out infinite,
+    ray-extend 6s ease-in-out infinite;
+  opacity: 0.7;
+  box-shadow:
+    0 0 8px rgba(140, 200, 255, 0.5),
+    0 0 15px rgba(120, 180, 255, 0.3);
+}
+
+/* 细微光线 */
+.subtle-ray {
+  width: 80px;
+  height: 1px;
+  animation:
+    ray-pulse 2s ease-in-out infinite,
+    ray-extend 4s ease-in-out infinite;
+  opacity: 0.5;
+  filter: blur(0.5px);
+  box-shadow:
+    0 0 5px rgba(160, 220, 255, 0.4),
+    0 0 10px rgba(140, 200, 255, 0.2);
+}
+
+/* 光芒动画 */
+@keyframes ray-pulse {
+
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scaleX(0.8);
+  }
+
+  25% {
+    opacity: 0.8;
+    transform: scaleX(1.2);
+  }
+
+  50% {
+    opacity: 0.5;
+    transform: scaleX(1);
+  }
+
+  75% {
+    opacity: 0.9;
+    transform: scaleX(1.1);
+  }
+}
+
+@keyframes ray-extend {
+
+  0%,
+  100% {
+    width: var(--base-width, 100px);
+    filter: blur(1px) brightness(1);
+  }
+
+  33% {
+    width: calc(var(--base-width, 100px) * 1.3);
+    filter: blur(0.8px) brightness(1.2);
+  }
+
+  66% {
+    width: calc(var(--base-width, 100px) * 0.9);
+    filter: blur(1.2px) brightness(0.9);
+  }
+}
+
+/* 为不同类型的光线设置基础宽度 */
+.main-ray {
+  --base-width: 200px;
+}
+
+.secondary-ray {
+  --base-width: 120px;
+}
+
+.subtle-ray {
+  --base-width: 80px;
+}
+
+/* 移除旧的陨石带样式 */
+.asteroid-belt-3d,
+.asteroid-ring-3d,
+.asteroid-3d,
+.asteroid-particle {
+  display: none;
+}
+
+/* 优化的3D行星环 */
+.planet-ring {
+  position: absolute;
+  inset: -20px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background:
+    conic-gradient(from 0deg,
+      rgba(100, 150, 255, 0) 0deg,
+      rgba(120, 180, 255, 0.3) 45deg,
+      rgba(150, 200, 255, 0.5) 90deg,
+      rgba(180, 220, 255, 0.4) 135deg,
+      rgba(200, 240, 255, 0.2) 180deg,
+      rgba(180, 220, 255, 0.4) 225deg,
+      rgba(150, 200, 255, 0.5) 270deg,
+      rgba(120, 180, 255, 0.3) 315deg,
+      rgba(100, 150, 255, 0) 360deg);
+  background-clip: padding-box;
+  animation:
+    planet-ring-rotate 60s linear infinite,
+    planet-ring-pulse 8s ease-in-out infinite;
+  filter: blur(1px);
+  opacity: 0.6;
+  transform-style: preserve-3d;
+}
+
+.planet-ring::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  background:
+    conic-gradient(from 180deg,
+      rgba(80, 120, 255, 0) 0deg,
+      rgba(100, 150, 255, 0.2) 60deg,
+      rgba(130, 170, 255, 0.4) 120deg,
+      rgba(160, 200, 255, 0.3) 180deg,
+      rgba(130, 170, 255, 0.4) 240deg,
+      rgba(100, 150, 255, 0.2) 300deg,
+      rgba(80, 120, 255, 0) 360deg);
+  animation: planet-ring-rotate 45s linear infinite reverse;
+  filter: blur(0.5px);
+}
+
+.planet-ring::after {
+  content: '';
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%,
+      rgba(200, 220, 255, 0) 70%,
+      rgba(150, 180, 255, 0.1) 80%,
+      rgba(120, 150, 255, 0.2) 90%,
+      rgba(100, 130, 255, 0.1) 100%);
+  animation: planet-ring-rotate 30s linear infinite;
+  filter: blur(2px);
+}
+
+@keyframes planet-ring-rotate {
+  0% {
+    transform: rotate(0deg) rotateX(75deg);
+  }
+
+  100% {
+    transform: rotate(360deg) rotateX(75deg);
+  }
+}
+
+@keyframes planet-ring-pulse {
+
+  0%,
+  100% {
+    opacity: 0.6;
+    filter: blur(1px) brightness(1);
+  }
+
+  25% {
+    opacity: 0.8;
+    filter: blur(0.8px) brightness(1.2);
+  }
+
+  50% {
+    opacity: 0.5;
+    filter: blur(1.2px) brightness(0.9);
+  }
+
+  75% {
+    opacity: 0.7;
+    filter: blur(0.9px) brightness(1.1);
+  }
+}

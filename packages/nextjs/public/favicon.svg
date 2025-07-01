@@ -1,0 +1,52 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- 背景圆形 -->
+  <circle cx="16" cy="16" r="15" fill="url(#bg)" stroke="url(#border)" stroke-width="1"/>
+  
+  <!-- NFT方块主体 -->
+  <rect x="11" y="11" width="10" height="10" rx="1.5" fill="url(#nft)" stroke="#ffffff" stroke-width="0.8" opacity="0.9"/>
+  
+  <!-- 盲拍眼罩 -->
+  <ellipse cx="16" cy="13" rx="6" ry="2" fill="#374151"/>
+  <ellipse cx="16" cy="13" rx="5" ry="1.5" fill="#1f2937" opacity="0.8"/>
+  
+  <!-- 眼罩带子 -->
+  <rect x="9" y="12" width="2" height="2" rx="1" fill="#374151"/>
+  <rect x="21" y="12" width="2" height="2" rx="1" fill="#374151"/>
+  
+  <!-- NFT内容装饰（简化） -->
+  <rect x="13" y="15" width="2" height="2" rx="0.5" fill="#60a5fa" opacity="0.7"/>
+  <rect x="17" y="15" width="2" height="2" rx="0.5" fill="#a78bfa" opacity="0.7"/>
+  <rect x="13" y="18" width="2" height="2" rx="0.5" fill="#34d399" opacity="0.7"/>
+  <rect x="17" y="18" width="2" height="2" rx="0.5" fill="#fbbf24" opacity="0.7"/>
+  
+  <!-- 拍卖锤装饰（简化） -->
+  <g transform="translate(22, 22) scale(0.6)">
+    <rect x="0" y="1" width="3" height="1.5" rx="0.5" fill="#e5e7eb"/>
+    <rect x="1.2" y="2.5" width="0.6" height="3" fill="#92400e"/>
+  </g>
+  
+  <!-- 区块链装饰点 -->
+  <circle cx="8" cy="8" r="1" fill="#06b6d4" opacity="0.6"/>
+  <circle cx="24" cy="8" r="1" fill="#8b5cf6" opacity="0.6"/>
+  <circle cx="8" cy="24" r="1" fill="#10b981" opacity="0.6"/>
+  
+  <defs>
+    <!-- 背景渐变 -->
+    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </radialGradient>
+    
+    <!-- 边框渐变 -->
+    <linearGradient id="border" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+    
+    <!-- NFT方块渐变 -->
+    <linearGradient id="nft" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1f2937"/>
+      <stop offset="100%" stop-color="#4b5563"/>
+    </linearGradient>
+  </defs>
+</svg> 

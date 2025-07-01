@@ -45,7 +45,7 @@ p {
 @keyframes twinkle {
   0% {
     opacity: 0.3;
-    transform: scale(0.8);
+    transform: scale(0.9);
   }
 
   50% {
@@ -55,7 +55,7 @@ p {
 
   100% {
     opacity: 0.3;
-    transform: scale(0.8);
+    transform: scale(0.9);
   }
 }
 
@@ -102,10 +102,14 @@ p {
   will-change: transform, opacity;
   contain: strict;
   z-index: 1;
+  /* 确保初始状态就是旋转的，避免出现横线 */
+  transform: rotate(-45deg);
   /* 启用硬件加速 */
-  transform: translateZ(0);
+  transform: translateZ(0) rotate(-45deg);
   backface-visibility: hidden;
   perspective: 1000px;
+  /* 添加初始不透明度为0，避免初始可见 */
+  opacity: 0;
 }
 
 /* 3D悬浮效果 - 移除上下浮动只保留轻微旋转 */
@@ -579,6 +583,7 @@ p {
   }
 }
 
+/* 简化的行星环样式 */
 .planet-ring {
   position: absolute;
   width: 180%;
@@ -611,64 +616,126 @@ p {
   }
 }
 
-/* 陨石带 */
+/* 陨石带 - 重新设计为规律环绕星球的效果 */
 .asteroid-belt {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  transform-style: preserve-3d;
-  animation: asteroidBeltRotate 60s linear infinite;
-  will-change: transform;
-}
-
-@keyframes asteroidBeltRotate {
-  0% {
-    transform: rotateY(0) rotateX(70deg);
-  }
-
-  100% {
-    transform: rotateY(360deg) rotateX(70deg);
-  }
-}
-
-.asteroid {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: var(--asteroid-size, 4px);
-  height: var(--asteroid-size, 4px);
-  background-color: #aaa;
-  border-radius: 50%;
-  transform-origin: center center;
-  animation: asteroidOrbit var(--asteroid-speed, 20s) linear infinite;
-  animation-delay: var(--asteroid-delay, 0s);
-  transform: translate(-50%, -50%) rotate(var(--asteroid-y-rotation, 0deg)) translateX(var(--asteroid-distance, 120px)) rotateX(10deg);
-  box-shadow: 0 0 2px rgba(255, 255, 255, 0.8);
-  will-change: transform;
+  width: 100%;
+  height: 100%;
+  transform: translate(-50%, -50%);
+  transform-style: preserve-3d;
+  pointer-events: none;
 }
 
-.asteroid::before {
-  content: '';
+/* 陨石轨道环 - 创建多个椭圆轨道 */
+.asteroid-ring {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  top: 50%;
+  left: 50%;
   border-radius: 50%;
-  background: linear-gradient(45deg, rgba(180, 180, 180, 0.9), rgba(120, 120, 120, 0.4));
-  filter: blur(0.5px);
+  transform: translate(-50%, -50%) rotateX(var(--ring-tilt, 75deg));
+  animation: asteroidRingRotate var(--ring-speed, 40s) linear infinite;
+  will-change: transform;
+  overflow: hidden;
+  /* 防止陨石飞出轨道 */
 }
 
-@keyframes asteroidOrbit {
+/* 第一层陨石环 - 距离星球较近 */
+.asteroid-ring:nth-child(1) {
+  width: 260px;
+  height: 260px;
+  --ring-speed: 30s;
+  --ring-tilt: 75deg;
+}
+
+/* 第二层陨石环 - 距离适中 */
+.asteroid-ring:nth-child(2) {
+  width: 300px;
+  height: 300px;
+  --ring-speed: 45s;
+  --ring-tilt: 78deg;
+  animation-direction: reverse;
+}
+
+/* 第三层陨石环 - 距离较远 */
+.asteroid-ring:nth-child(3) {
+  width: 340px;
+  height: 340px;
+  --ring-speed: 60s;
+  --ring-tilt: 72deg;
+}
+
+@keyframes asteroidRingRotate {
   0% {
-    transform: translate(-50%, -50%) rotate(0deg) translateX(var(--asteroid-distance, 120px)) rotateX(10deg);
+    transform: translate(-50%, -50%) rotateX(var(--ring-tilt, 75deg)) rotateY(0deg);
   }
 
   100% {
-    transform: translate(-50%, -50%) rotate(360deg) translateX(var(--asteroid-distance, 120px)) rotateX(10deg);
+    transform: translate(-50%, -50%) rotateX(var(--ring-tilt, 75deg)) rotateY(360deg);
   }
+}
+
+/* 陨石 - 重新设计为环上的点 */
+.asteroid {
+  position: absolute;
+  width: var(--asteroid-size, 3px);
+  height: var(--asteroid-size, 3px);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.9) 0%, rgba(200, 220, 255, 0.6) 70%, transparent 100%);
+  border-radius: 50%;
+  box-shadow:
+    0 0 4px rgba(255, 255, 255, 0.8),
+    0 0 8px rgba(150, 180, 255, 0.4),
+    0 0 12px rgba(100, 150, 255, 0.2);
+  animation: asteroidTwinkle var(--twinkle-speed, 3s) ease-in-out infinite;
+  animation-delay: var(--asteroid-delay, 0s);
+  will-change: opacity, transform;
+}
+
+/* 陨石闪烁效果 */
+@keyframes asteroidTwinkle {
+
+  0%,
+  100% {
+    opacity: 0.6;
+    transform: scale(0.8);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 为不同陨石添加变化 */
+.asteroid:nth-child(odd) {
+  --asteroid-size: 2px;
+  --twinkle-speed: 2.5s;
+}
+
+.asteroid:nth-child(even) {
+  --asteroid-size: 4px;
+  --twinkle-speed: 3.5s;
+}
+
+.asteroid:nth-child(3n) {
+  --asteroid-size: 3px;
+  --twinkle-speed: 4s;
+  background: radial-gradient(circle, rgba(255, 200, 150, 0.9) 0%, rgba(255, 180, 120, 0.6) 70%, transparent 100%);
+  box-shadow:
+    0 0 4px rgba(255, 200, 150, 0.8),
+    0 0 8px rgba(255, 150, 100, 0.4),
+    0 0 12px rgba(255, 120, 80, 0.2);
+}
+
+.asteroid:nth-child(5n) {
+  --asteroid-size: 2.5px;
+  --twinkle-speed: 2s;
+  background: radial-gradient(circle, rgba(150, 255, 200, 0.9) 0%, rgba(120, 255, 180, 0.6) 70%, transparent 100%);
+  box-shadow:
+    0 0 4px rgba(150, 255, 200, 0.8),
+    0 0 8px rgba(100, 255, 150, 0.4),
+    0 0 12px rgba(80, 255, 120, 0.2);
 }
 
 /* 文本渐变效果 */
