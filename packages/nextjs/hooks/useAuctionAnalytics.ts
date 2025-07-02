@@ -110,7 +110,6 @@ export const useAuctionAnalytics = () => {
       const currentBlock = await publicClient.getBlockNumber();
 
       if (cachedData && BigInt(cachedData.blockNumber) === currentBlock) {
-        console.log('🎯 数据分析使用缓存数据');
         setAnalyticsData(cachedData.data);
         setLoading(false);
         return;
@@ -393,14 +392,45 @@ export const useAuctionAnalytics = () => {
               }
             }
           });
+
+          // 也统计揭示阶段的参与者
+          try {
+            const revealLogs = await publicClient.getContractEvents({
+              address: auction.address,
+              abi: blindAuctionInfo.abi,
+              eventName: 'BidRevealed',
+              fromBlock: BigInt(0),
+            });
+
+            revealLogs.forEach(revealLog => {
+              if (revealLog.args?.bidder) {
+                const bidder = revealLog.args.bidder as string;
+                totalParticipants.add(bidder);
+
+                // 确保揭示阶段的参与者也被记录到bidderStats中
+                if (!bidderStats[bidder]) {
+                  bidderStats[bidder] = { totalBids: 0, totalVolume: BigInt(0) };
+                }
+              }
+            });
+          } catch (revealError) {
+            console.warn(`获取拍卖 ${auction.address} 揭示事件失败:`, revealError);
+          }
+
         } catch (e) {
           console.warn(`获取拍卖 ${auction.address} 竞拍事件失败:`, e);
+
+          // 备用方案：如果事件日志获取失败，通过最高出价者推断参与者
+          if (auction.highestBidder && auction.highestBidder !== '0x0000000000000000000000000000000000000000') {
+            totalParticipants.add(auction.highestBidder);
+
+            // 确保备用方案的参与者也被记录到bidderStats中
+            if (!bidderStats[auction.highestBidder]) {
+              bidderStats[auction.highestBidder] = { totalBids: 1, totalVolume: auction.highestBid };
+            }
+          }
         }
       }
-
-      console.log('📊 统计结果:');
-      console.log('- 总成交量(BigInt):', totalVolume.toString());
-      console.log('- 成功拍卖数:', successfulAuctions);
 
       // 计算平均价格（基于成功成交的拍卖）
       const averagePrice = successfulAuctions > 0
