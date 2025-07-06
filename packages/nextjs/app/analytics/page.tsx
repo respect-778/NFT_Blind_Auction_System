@@ -663,14 +663,14 @@ export default function AnalyticsPage() {
         )}
 
         {/* 顶级竞拍者排行榜 */}
-        <div className="relative group mb-12">
-          <div className="absolute -inset-0.5 bg-gradient-to-r from-yellow-600 to-orange-600 rounded-xl blur opacity-20 group-hover:opacity-30 transition duration-1000"></div>
-          <div className="relative bg-slate-900/80 backdrop-blur-xl rounded-xl p-8 border border-slate-700/50">
-            <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent"></div>
-            <h3 className="text-xl font-semibold text-white mb-6 flex items-center">
-              <span className="w-3 h-3 bg-gradient-to-r from-yellow-400 to-orange-400 rounded-full mr-3"></span>
-              🏆 顶级竞拍者排行榜
-            </h3>
+          <div className="relative group mb-12">
+            <div className="absolute -inset-0.5 bg-gradient-to-r from-yellow-600 to-orange-600 rounded-xl blur opacity-20 group-hover:opacity-30 transition duration-1000"></div>
+            <div className="relative bg-slate-900/80 backdrop-blur-xl rounded-xl p-8 border border-slate-700/50">
+              <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent"></div>
+              <h3 className="text-xl font-semibold text-white mb-6 flex items-center">
+                <span className="w-3 h-3 bg-gradient-to-r from-yellow-400 to-orange-400 rounded-full mr-3"></span>
+                🏆 顶级竞拍者排行榜
+              </h3>
             {analyticsData.topBidders.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="table w-full">
@@ -715,9 +715,9 @@ export default function AnalyticsPage() {
                   <div className="text-4xl mb-4 opacity-50">🏆</div>
                   <p className="text-lg mb-2">暂无竞拍者数据</p>
                   <p className="text-sm">当有用户参与拍卖后，排行榜将显示在这里</p>
-                </div>
-              </div>
-            )}
+            </div>
+          </div>
+        )}
           </div>
         </div>
 

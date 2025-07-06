@@ -49,15 +49,20 @@ export const menuLinks: HeaderMenuLink[] = [
     icon: <UserCircleIcon className="h-4 w-4" />,
   },
   {
+    label: "NFT下载",
+    href: "/nft-download",
+    icon: <CircleStackIcon className="h-4 w-4" />,
+  },
+  {
     label: "数据分析",
     href: "/analytics",
     icon: <ChartBarIcon className="h-4 w-4" />,
   },
-  {
-    label: "调试合约",
-    href: "/debug",
-    icon: <BugAntIcon className="h-4 w-4" />,
-  },
+  // {
+  //   label: "调试合约",
+  //   href: "/debug",
+  //   icon: <BugAntIcon className="h-4 w-4" />,
+  // },
 ];
 
 export const HeaderMenuLinks = () => {

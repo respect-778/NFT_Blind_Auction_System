@@ -12,6 +12,8 @@ import { useRouter } from "next/navigation";
 import { formatEther, parseEther } from 'viem';
 import MeteorRain from "../../components/MeteorRain";
 import { useWriteContract } from "wagmi";
+import { OptimizedImage } from "~~/components/OptimizedImage";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
 
 type AuctionTab = "created" | "participated" | "nfts";
 type AuctionData = {
@@ -794,11 +796,11 @@ const MyAssets = () => {
       case "pending":
         return "bg-blue-600/30 border border-blue-500/50 text-blue-300";
       case "bidding":
-        return "bg-emerald-600/30 border border-emerald-500/50 text-emerald-300";
+        return "bg-green-600/30 border border-green-500/50 text-green-300";
       case "revealing":
         return "bg-yellow-600/30 border border-yellow-500/50 text-yellow-300";
       case "ended":
-        return "bg-green-600/30 border border-green-500/50 text-green-300";
+        return "bg-red-600/30 border border-red-500/50 text-red-300";
       default:
         return "bg-slate-600/30 border border-slate-500/50 text-slate-300";
     }
@@ -898,6 +900,42 @@ const MyAssets = () => {
     } catch (error) {
       console.error("清除缓存失败:", error);
       notification.error("清除缓存失败，请手动刷新页面");
+    }
+  };
+
+  // 修改格式化时间的函数
+  const formatEndTime = (timestamp: bigint) => {
+    const date = new Date(Number(timestamp) * 1000);
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).replace(/\//g, '-');
+  };
+
+  // 修改显示拍卖状态的函数
+  const getAuctionTimeDisplay = (auction: AuctionData) => {
+    if (auction.state === "ended") {
+      return formatEndTime(auction.revealEnd);
+    } else if (auction.state === "revealing") {
+      const timeLeft = Number(auction.revealEnd) - Math.floor(Date.now() / 1000);
+      if (timeLeft > 0) {
+        return formatTimeLeft(timeLeft);
+      } else {
+        return formatEndTime(auction.revealEnd);
+      }
+    } else if (auction.state === "bidding") {
+      const timeLeft = Number(auction.biddingEnd) - Math.floor(Date.now() / 1000);
+      if (timeLeft > 0) {
+        return formatTimeLeft(timeLeft);
+      } else {
+        return formatEndTime(auction.biddingEnd);
+      }
+    } else {
+      return formatEndTime(auction.biddingStart || BigInt(0));
     }
   };
 
@@ -1016,13 +1054,24 @@ const MyAssets = () => {
                       </div>
                     </div>
 
-                    <button className="relative inline-flex items-center px-8 py-4 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-semibold rounded-2xl shadow-lg hover:shadow-blue-500/25 transition-all duration-300 transform hover:scale-105 group overflow-hidden">
-                      <div className="absolute inset-0 bg-gradient-to-r from-blue-400/0 via-white/20 to-purple-400/0 transform -skew-x-12 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></div>
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-                      </svg>
-                      <span className="relative z-10">连接钱包开始</span>
-                    </button>
+                    <ConnectButton.Custom>
+                      {({ account, chain, openConnectModal, mounted }) => {
+                        const connected = mounted && account && chain;
+
+                        return (
+                          <button
+                            onClick={openConnectModal}
+                            className="relative inline-flex items-center px-8 py-4 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-semibold rounded-2xl shadow-lg hover:shadow-blue-500/25 transition-all duration-300 transform hover:scale-105 group overflow-hidden"
+                          >
+                            <div className="absolute inset-0 bg-gradient-to-r from-blue-400/0 via-white/20 to-purple-400/0 transform -skew-x-12 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></div>
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                            </svg>
+                            <span className="relative z-10">连接钱包开始</span>
+                          </button>
+                        );
+                      }}
+                    </ConnectButton.Custom>
                   </div>
                 </div>
               </div>
@@ -1196,10 +1245,19 @@ const MyAssets = () => {
 
                                 <div className="relative h-40 bg-slate-700/50 overflow-hidden">
                                   {auction.metadata.image ? (
-                                    <img
+                                    <OptimizedImage
                                       src={auction.metadata.image}
                                       alt={auction.metadata.name}
-                                      className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-500"
+                                      className="w-full h-full transform group-hover:scale-105 transition-transform duration-500"
+                                      quality={85}
+                                      objectFit="cover"
+                                      rounded="rounded-none"
+                                      onLoad={() => {
+                                        console.log(`创建的拍卖 ${auction.address} 图片加载成功`);
+                                      }}
+                                      onError={(error) => {
+                                        console.error(`创建的拍卖 ${auction.address} 图片加载失败:`, error);
+                                      }}
                                     />
                                   ) : (
                                     <div className="flex items-center justify-center h-full text-slate-400 bg-gradient-to-br from-slate-800 to-slate-900">
@@ -1227,9 +1285,11 @@ const MyAssets = () => {
                                         : `${formatEther(BigInt(auction.metadata.minPrice))} ETH`}
                                     </span>
                                   </div>
-                                  <div className="flex items-center justify-between text-sm mt-1">
-                                    <span className="text-slate-300">结束时间:</span>
-                                    <span className="text-blue-300">{formatTimeLeft(auction)}</span>
+                                  <div className="flex justify-between items-center text-sm">
+                                    <span className="text-slate-400">结束时间:</span>
+                                    <span className={`${auction.state === "ended" ? "text-slate-400" : "text-blue-400"}`}>
+                                      {getAuctionTimeDisplay(auction)}
+                                    </span>
                                   </div>
                                   <div className="mt-4 pt-3 border-t border-slate-700/50 flex justify-between items-center">
                                     <Link
@@ -1339,10 +1399,19 @@ const MyAssets = () => {
 
                               <div className="relative h-40 bg-slate-700/50 overflow-hidden">
                                 {auction.metadata.image ? (
-                                  <img
+                                  <OptimizedImage
                                     src={auction.metadata.image}
                                     alt={auction.metadata.name}
-                                    className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-500"
+                                    className="w-full h-full transform group-hover:scale-105 transition-transform duration-500"
+                                    quality={85}
+                                    objectFit="cover"
+                                    rounded="rounded-none"
+                                    onLoad={() => {
+                                      console.log(`参与的拍卖 ${auction.address} 图片加载成功`);
+                                    }}
+                                    onError={(error) => {
+                                      console.error(`参与的拍卖 ${auction.address} 图片加载失败:`, error);
+                                    }}
                                   />
                                 ) : (
                                   <div className="flex items-center justify-center h-full text-slate-400 bg-gradient-to-br from-slate-800 to-slate-900">
@@ -1370,9 +1439,11 @@ const MyAssets = () => {
                                       : `${formatEther(BigInt(auction.metadata.minPrice))} ETH`}
                                   </span>
                                 </div>
-                                <div className="flex items-center justify-between text-sm mt-1">
-                                  <span className="text-slate-300">结束时间:</span>
-                                  <span className="text-purple-300">{formatTimeLeft(auction)}</span>
+                                <div className="flex justify-between items-center text-sm">
+                                  <span className="text-slate-400">结束时间:</span>
+                                  <span className={`${auction.state === "ended" ? "text-slate-400" : "text-blue-400"}`}>
+                                    {getAuctionTimeDisplay(auction)}
+                                  </span>
                                 </div>
                                 <div className="mt-4 pt-3 border-t border-slate-700/50 flex justify-between items-center">
                                   <Link
@@ -1503,30 +1574,28 @@ const MyAssets = () => {
 
                               <div className="relative h-40 bg-slate-700/50 overflow-hidden">
                                 {nft.image ? (
-                                  <img
+                                  <OptimizedImage
                                     src={nft.image}
                                     alt={nft.name}
-                                    className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-500"
-                                    onError={(e) => {
-                                      console.error(`NFT ${nft.tokenId} 图片加载失败:`, nft.image);
-                                      const img = e.currentTarget as HTMLImageElement;
-                                      img.style.display = 'none';
-                                      const fallback = img.nextElementSibling as HTMLElement;
-                                      if (fallback) {
-                                        fallback.classList.remove('hidden');
-                                        fallback.classList.add('flex');
-                                      }
+                                    className="w-full h-full transform group-hover:scale-105 transition-transform duration-500"
+                                    quality={85}
+                                    objectFit="cover"
+                                    rounded="rounded-none"
+                                    onLoad={() => {
+                                      console.log(`NFT ${nft.tokenId} 图片加载成功`);
+                                    }}
+                                    onError={(error) => {
+                                      console.error(`NFT ${nft.tokenId} 图片加载失败:`, error);
                                     }}
                                   />
-                                ) : null}
-
-                                {/* 默认显示图片占位符，如果有图片则隐藏 */}
-                                <div className={`${nft.image ? 'hidden' : 'flex'} items-center justify-center h-full text-slate-400 bg-gradient-to-br from-slate-800 to-slate-900 flex-col`}>
-                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                  </svg>
-                                  <span className="text-xs">{nft.image ? '图片加载失败' : '暂无图片'}</span>
-                                </div>
+                                ) : (
+                                  <div className="flex items-center justify-center h-full text-slate-400 bg-gradient-to-br from-slate-800 to-slate-900 flex-col">
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                    </svg>
+                                    <span className="text-xs">暂无图片</span>
+                                  </div>
+                                )}
 
                                 {/* Token ID 标签 */}
                                 <div className="absolute top-2 right-2 bg-purple-600/80 backdrop-blur-sm px-2 py-1 rounded-md text-xs font-semibold text-white">

@@ -2,13 +2,14 @@
 
 import { useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { useAccount, useWalletClient, useWriteContract } from "wagmi";
+import { useAccount, useWalletClient, useWriteContract, usePublicClient } from "wagmi";
 import { PhotoIcon, CloudArrowUpIcon, SparklesIcon, CheckCircleIcon } from "@heroicons/react/24/outline";
 import { MetaHeader } from "~~/components/MetaHeader";
 import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
 import { notification } from "~~/utils/scaffold-eth";
 import MeteorRain from "~~/components/MeteorRain";
 import { parseEther } from "viem";
+import { handleTransactionError, handleTransactionStatus } from "~~/utils/transactionErrorHandler";
 
 // Pinata API相关配置 - 使用您提供的新密钥
 const PINATA_API_URL = "https://api.pinata.cloud/pinning/pinFileToIPFS";
@@ -87,6 +88,7 @@ export default function MintNFT() {
   const { address: connectedAddress, isConnected } = useAccount();
   const { data: walletClient } = useWalletClient();
   const { writeContractAsync } = useWriteContract();
+  const publicClient = usePublicClient();
 
   // 合约数据
   const { data: nftContractData } = useDeployedContractInfo("AuctionNFT");
@@ -371,7 +373,7 @@ export default function MintNFT() {
       // 构建Token URI
       const tokenURI = `https://ipfs.io/ipfs/${ipfsHash}`;
 
-      notification.info("正在铸造NFT...");
+      notification.info("正在发起NFT铸造交易...");
 
       // 调用智能合约铸造NFT
       const tx = await writeContractAsync({
@@ -387,24 +389,36 @@ export default function MintNFT() {
         ],
       });
 
-      notification.success("🎉 NFT铸造成功！您可以继续铸造更多NFT或前往我的资产查看。");
+      handleTransactionStatus.pending("NFT铸造");
 
-      // 重置表单，让用户可以继续铸造
-      setImageFile(null);
-      setImagePreview(null);
-      setOriginalImagePreview(null);
-      setIpfsHash("");
-      setTitle("");
-      setDescription("");
-      setPixelSize(0);
-      setIsImageEdited(false); // 重置编辑标记
-      setHasEmoji(false); // 重置表情包标记
+      // 等待交易被确认
+      if (!publicClient) throw new Error("无法获取公共客户端");
 
-      // 不再自动跳转，让用户留在当前页面
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: tx,
+        confirmations: 1 // 等待1个区块确认
+      });
 
-    } catch (error) {
-      console.error("NFT铸造失败:", error);
-      notification.error("NFT铸造失败，请重试");
+      if (receipt.status === 'success') {
+        handleTransactionStatus.confirmed("NFT铸造");
+
+        // 重置表单，让用户可以继续铸造
+        setImageFile(null);
+        setImagePreview(null);
+        setOriginalImagePreview(null);
+        setIpfsHash("");
+        setTitle("");
+        setDescription("");
+        setPixelSize(0);
+        setIsImageEdited(false); // 重置编辑标记
+        setHasEmoji(false); // 重置表情包标记
+      } else {
+        throw new Error("交易执行失败");
+      }
+
+    } catch (error: any) {
+      console.error("铸造NFT失败:", error);
+      handleTransactionError(error, "NFT铸造");
     } finally {
       setIsMinting(false);
     }

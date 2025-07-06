@@ -162,7 +162,7 @@ export const useAuctionAnalytics = () => {
       let totalParticipants = new Set<string>();
       const categoryData: { [key: string]: number } = {};
       const priceHistory: { date: string; avgPrice: number; volume: number }[] = [];
-      const bidderStats: { [key: string]: { totalBids: number; totalVolume: bigint } } = {};
+      const bidderStats: { [key: string]: { totalBids: number; totalVolume: bigint; auctions: Set<string> } } = {};
       const dailyStatsMap: { [key: string]: { auctions: number; volume: number } } = {};
 
       // 批量获取拍卖数据以提高性能
@@ -371,6 +371,7 @@ export const useAuctionAnalytics = () => {
 
         // 获取竞拍参与者数据
         try {
+          // 获取所有竞拍事件
           const bidLogs = await publicClient.getContractEvents({
             address: auction.address,
             abi: blindAuctionInfo.abi,
@@ -378,44 +379,62 @@ export const useAuctionAnalytics = () => {
             fromBlock: BigInt(0),
           });
 
+          // 获取所有揭示事件
+          const revealLogs = await publicClient.getContractEvents({
+            address: auction.address,
+            abi: blindAuctionInfo.abi,
+            eventName: 'BidRevealed',
+            fromBlock: BigInt(0),
+          });
+
+          // 记录每个竞拍者的投标记录
+          const auctionBidders = new Map<string, { bids: number; volume: bigint }>();
+
+          // 首先统计所有投标记录
           bidLogs.forEach(bidLog => {
             if (bidLog.args?.bidder) {
               const bidder = bidLog.args.bidder as string;
               totalParticipants.add(bidder);
 
-              if (!bidderStats[bidder]) {
-                bidderStats[bidder] = { totalBids: 0, totalVolume: BigInt(0) };
+              if (!auctionBidders.has(bidder)) {
+                auctionBidders.set(bidder, { bids: 0, volume: BigInt(0) });
               }
-              bidderStats[bidder].totalBids++;
-              if (bidLog.args.deposit) {
-                bidderStats[bidder].totalVolume += BigInt(bidLog.args.deposit);
+              const bidderData = auctionBidders.get(bidder)!;
+              bidderData.bids += 1;
+
+              // 初始化全局统计
+              if (!bidderStats[bidder]) {
+                bidderStats[bidder] = {
+                  totalBids: 0,
+                  totalVolume: BigInt(0),
+                  auctions: new Set()
+                };
               }
             }
           });
 
-          // 也统计揭示阶段的参与者
-          try {
-            const revealLogs = await publicClient.getContractEvents({
-              address: auction.address,
-              abi: blindAuctionInfo.abi,
-              eventName: 'BidRevealed',
-              fromBlock: BigInt(0),
-            });
+          // 然后统计已揭示的出价
+          revealLogs.forEach(revealLog => {
+            if (revealLog.args?.bidder && revealLog.args?.value && revealLog.args?.success !== undefined) {
+              const bidder = revealLog.args.bidder as string;
+              const value = BigInt(revealLog.args.value);
+              const isValidBid = revealLog.args.success;
 
-            revealLogs.forEach(revealLog => {
-              if (revealLog.args?.bidder) {
-                const bidder = revealLog.args.bidder as string;
-                totalParticipants.add(bidder);
-
-                // 确保揭示阶段的参与者也被记录到bidderStats中
-                if (!bidderStats[bidder]) {
-                  bidderStats[bidder] = { totalBids: 0, totalVolume: BigInt(0) };
+              if (isValidBid) {
+                const bidderData = auctionBidders.get(bidder);
+                if (bidderData) {
+                  bidderData.volume += value;
                 }
               }
-            });
-          } catch (revealError) {
-            console.warn(`获取拍卖 ${auction.address} 揭示事件失败:`, revealError);
-          }
+            }
+          });
+
+          // 更新全局统计
+          auctionBidders.forEach((data, bidder) => {
+            bidderStats[bidder].totalBids += data.bids;
+            bidderStats[bidder].totalVolume += data.volume;
+            bidderStats[bidder].auctions.add(auction.address);
+          });
 
         } catch (e) {
           console.warn(`获取拍卖 ${auction.address} 竞拍事件失败:`, e);
@@ -424,9 +443,16 @@ export const useAuctionAnalytics = () => {
           if (auction.highestBidder && auction.highestBidder !== '0x0000000000000000000000000000000000000000') {
             totalParticipants.add(auction.highestBidder);
 
-            // 确保备用方案的参与者也被记录到bidderStats中
             if (!bidderStats[auction.highestBidder]) {
-              bidderStats[auction.highestBidder] = { totalBids: 1, totalVolume: auction.highestBid };
+              bidderStats[auction.highestBidder] = {
+                totalBids: 1,
+                totalVolume: auction.highestBid,
+                auctions: new Set([auction.address])
+              };
+            } else {
+              bidderStats[auction.highestBidder].totalBids += 1;
+              bidderStats[auction.highestBidder].totalVolume += auction.highestBid;
+              bidderStats[auction.highestBidder].auctions.add(auction.address);
             }
           }
         }
@@ -446,12 +472,28 @@ export const useAuctionAnalytics = () => {
 
       // 获取顶级竞拍者
       const topBidders = Object.entries(bidderStats)
-        .sort((a, b) => Number(b[1].totalVolume - a[1].totalVolume))
-        .slice(0, 10)
         .map(([address, stats]) => ({
-          address: `${address.slice(0, 6)}...${address.slice(-4)}`,
+          address: address,
+          displayAddress: `${address.slice(0, 6)}...${address.slice(-4)}`,
           totalBids: stats.totalBids,
-          totalVolume: formatEther(stats.totalVolume)
+          totalVolume: formatEther(stats.totalVolume),
+          uniqueAuctions: stats.auctions.size
+        }))
+        // 首先按总投入量排序
+        .sort((a, b) => parseFloat(b.totalVolume) - parseFloat(a.totalVolume))
+        // 如果总投入量相同，按参与次数排序
+        .sort((a, b) => {
+          const volumeDiff = parseFloat(b.totalVolume) - parseFloat(a.totalVolume);
+          if (volumeDiff === 0) {
+            return b.totalBids - a.totalBids;
+          }
+          return volumeDiff;
+        })
+        .slice(0, 10)
+        .map(bidder => ({
+          address: bidder.displayAddress,
+          totalBids: bidder.totalBids,
+          totalVolume: bidder.totalVolume
         }));
 
       // 处理每日统计

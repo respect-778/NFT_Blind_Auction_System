@@ -10,6 +10,7 @@ import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { notification } from "~~/utils/scaffold-eth";
 import MeteorRain from "~~/components/MeteorRain";
+import { handleTransactionError, handleTransactionStatus } from "~~/utils/transactionErrorHandler";
 
 type NFTData = {
   tokenId: number;
@@ -106,18 +107,18 @@ function SellNFTContent() {
         ],
       });
 
-      notification.info("交易已提交，等待确认...");
+      handleTransactionStatus.pending("创建拍卖");
 
       // 等待交易确认
       if (publicClient) {
         await publicClient.waitForTransactionReceipt({ hash });
       }
 
-      notification.success("NFT重新拍卖创建成功！");
+      handleTransactionStatus.confirmed("创建拍卖");
       router.push("/my-auctions");
     } catch (error: any) {
       console.error("创建NFT重新拍卖失败:", error);
-      notification.error(`创建失败: ${error.message || "未知错误"}`);
+      handleTransactionError(error, "创建拍卖");
     } finally {
       setLoading(false);
     }

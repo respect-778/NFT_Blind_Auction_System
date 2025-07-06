@@ -10,6 +10,7 @@ import { formatEther, parseEther, keccak256, encodePacked, toBytes, Hex } from '
 import MeteorRain from '~~/components/MeteorRain';
 import StarryBackground from '~~/components/StarryBackground';
 import { MetaHeader } from '~~/components/MetaHeader';
+import { handleTransactionError, handleTransactionStatus } from "~~/utils/transactionErrorHandler";
 
 function BidContent() {
   const { address: connectedAddress } = useAccount();
@@ -289,7 +290,7 @@ function BidContent() {
       }
 
       setIsSubmitting(true);
-      notification.info("正在提交您的出价...");
+      handleTransactionStatus.submitted("出价");
 
       // 第一步：提交交易
       const hash = await walletClient.writeContract({
@@ -305,7 +306,7 @@ function BidContent() {
       setIsWaitingConfirmation(true);
       setIsSubmitting(false);
 
-      notification.info("交易已提交，正在等待区块链确认...");
+      handleTransactionStatus.pending("出价");
 
       // 第二步：等待交易确认
       if (publicClient) {
@@ -319,7 +320,7 @@ function BidContent() {
           setTxConfirmed(true);
           setIsWaitingConfirmation(false);
 
-          notification.success("出价成功！您的出价已记录在区块链上。");
+          handleTransactionStatus.confirmed("出价");
 
           // 保存竞拍信息到本地
           const bidInfo = {
@@ -352,11 +353,8 @@ function BidContent() {
       setIsWaitingConfirmation(false);
       setTxHash('');
 
-      if (error.name === 'TimeoutError') {
-        notification.error("交易确认超时，请检查交易状态");
-      } else {
-        notification.error(`出价失败: ${error.shortMessage || error.message}`);
-      }
+      // 使用统一的错误处理
+      handleTransactionError(error, "出价");
     }
   };
 

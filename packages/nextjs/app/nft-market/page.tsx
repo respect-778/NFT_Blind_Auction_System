@@ -4,14 +4,16 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAccount, usePublicClient } from "wagmi";
-import { Address } from "~~/components/scaffold-eth";
-import { MetaHeader } from "~~/components/MetaHeader";
-import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
 import { notification } from "~~/utils/scaffold-eth";
-import { formatEther } from "viem";
+import { SparklesIcon, ClipboardIcon } from "@heroicons/react/24/outline";
+import { MetaHeader } from "~~/components/MetaHeader";
 import MeteorRain from "~~/components/MeteorRain";
-import { SparklesIcon, ShoppingBagIcon, FireIcon, MagnifyingGlassIcon, ClipboardIcon } from "@heroicons/react/24/outline";
+import StarryBackground from "~~/components/StarryBackground";
+import OptimizedImage from "~~/components/OptimizedImage";
+import { useImagePreloader } from "~~/utils/imageCache";
+import { formatEther } from "viem";
 
 type NFTItem = {
   tokenId: number;
@@ -41,160 +43,153 @@ export default function NFTMarket() {
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient({ chainId: targetNetwork.id });
 
+  // 图片预加载Hook
+  const { preloadImages } = useImagePreloader();
+
   // 加载所有NFT
   useEffect(() => {
     if (!nftContractData || !publicClient) return;
     loadAllNFTs();
   }, [nftContractData, publicClient]);
 
+  // 过滤逻辑
+  const filteredNFTs = allNFTs.filter(nft => {
+    // 基础过滤
+    let baseFilter = true;
+    switch (filter) {
+      case "my-created":
+        baseFilter = address ? nft.creator.toLowerCase() === address.toLowerCase() : false;
+        break;
+      case "my-owned":
+        baseFilter = address ? nft.owner.toLowerCase() === address.toLowerCase() : false;
+        break;
+      default:
+        baseFilter = true;
+    }
+
+    // 搜索过滤
+    const searchFilter = searchTerm === "" ||
+      nft.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      nft.description.toLowerCase().includes(searchTerm.toLowerCase());
+
+    return baseFilter && searchFilter;
+  });
+
+  // 分页数据
+  const indexOfLastItem = currentPage * itemsPerPage;
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+  const currentNFTs = filteredNFTs.slice(indexOfFirstItem, indexOfLastItem);
+  const totalPages = Math.ceil(filteredNFTs.length / itemsPerPage);
+
+  // 预加载当前页面图片
+  useEffect(() => {
+    const imageUrls = currentNFTs
+      .map(nft => nft.image)
+      .filter(Boolean);
+
+    if (imageUrls.length > 0) {
+      preloadImages(imageUrls, 2); // 并发加载2个图片
+    }
+  }, [currentNFTs, preloadImages]);
+
   const loadAllNFTs = async () => {
+    if (!publicClient || !nftContractData) return;
+
+    setLoading(true);
     try {
-      setLoading(true);
-
-      if (!nftContractData || !publicClient) {
-        console.log("NFT合约数据或公共客户端未准备好");
-        return;
-      }
-
       console.log("开始获取所有NFT数据...");
 
-      // 获取总NFT数量
+      // 获取NFT总数
       const totalSupply = await publicClient.readContract({
         address: nftContractData.address,
         abi: nftContractData.abi,
         functionName: 'totalSupply',
       }) as bigint;
 
-      console.log("NFT总数:", totalSupply.toString());
+      console.log(`NFT总供应量: ${totalSupply}`);
 
-      if (Number(totalSupply) === 0) {
+      if (totalSupply === 0n) {
+        console.log("当前没有铸造任何NFT");
         setAllNFTs([]);
+        setLoading(false);
         return;
       }
 
-      // 获取所有NFT的详细信息
       const nftsList: NFTItem[] = [];
 
+      // 逐个获取NFT信息
       for (let tokenId = 1; tokenId <= Number(totalSupply); tokenId++) {
         try {
-          console.log(`正在获取NFT ${tokenId} 的信息...`);
+          console.log(`正在获取NFT ${tokenId} 的详细信息...`);
 
-          // 检查NFT是否存在并获取详细信息
-          const [metadata, owner] = await Promise.all([
-            publicClient.readContract({
-              address: nftContractData.address,
-              abi: nftContractData.abi,
-              functionName: 'nftMetadata',
-              args: [BigInt(tokenId)],
-            }) as Promise<any>,
-            publicClient.readContract({
-              address: nftContractData.address,
-              abi: nftContractData.abi,
-              functionName: 'ownerOf',
-              args: [BigInt(tokenId)],
-            }) as Promise<string>,
-          ]);
+          // 获取NFT元数据
+          const nftMetadata = await publicClient.readContract({
+            address: nftContractData.address,
+            abi: nftContractData.abi,
+            functionName: 'nftMetadata',
+            args: [BigInt(tokenId)],
+          }) as readonly [string, string, string, bigint, `0x${string}`, boolean, `0x${string}`, bigint];
 
-          console.log(`NFT ${tokenId} 原始元数据:`, metadata);
-          console.log(`NFT ${tokenId} 拥有者:`, owner);
+          const [name, description, imageHash, minPrice, creator, isAuctioned, owner, createTime] = nftMetadata;
 
-          // 根据合约结构体 NFTMetadata 解析数据
-          // struct NFTMetadata { name, description, imageHash, minPrice, creator, isAuctioned, auctionContract, createTime }
-          const parsedMetadata = {
-            name: metadata?.name || metadata?.[0] || `NFT #${tokenId}`,
-            description: metadata?.description || metadata?.[1] || "无描述",
-            imageHash: metadata?.imageHash || metadata?.[2] || "",
-            minPrice: metadata?.minPrice || metadata?.[3] || 0n,
-            creator: metadata?.creator || metadata?.[4] || "",
-            isAuctioned: metadata?.isAuctioned || metadata?.[5] || false,
-            auctionContract: metadata?.auctionContract || metadata?.[6] || "",
-            createTime: metadata?.createTime || metadata?.[7] || 0n,
+          // 获取当前拥有者
+          const currentOwner = await publicClient.readContract({
+            address: nftContractData.address,
+            abi: nftContractData.abi,
+            functionName: 'ownerOf',
+            args: [BigInt(tokenId)],
+          }) as string;
+
+          // 构建图片URL
+          let imageUrl = "";
+          if (imageHash) {
+            if (imageHash.startsWith('http')) {
+              imageUrl = imageHash;
+            } else if (imageHash.startsWith('ipfs://')) {
+              const hash = imageHash.replace('ipfs://', '');
+              imageUrl = `https://ipfs.io/ipfs/${hash}`;
+            } else if (imageHash.trim()) {
+              imageUrl = `https://ipfs.io/ipfs/${imageHash}`;
+            }
+          }
+
+          // 解析元数据
+          let parsedMetadata = {
+            name: name || `NFT #${tokenId}`,
+            description: description || "无描述",
+            creator: creator || "",
+            image: imageUrl,
+            imageHash: imageHash
           };
 
-          console.log(`NFT ${tokenId} 解析后元数据:`, parsedMetadata);
-
-          // 安全地获取价格数据 - 只有拍卖中的NFT才处理价格
-          let minPriceValue = "0";
-          if (parsedMetadata.isAuctioned) {
+          // 如果有描述且看起来像JSON，尝试解析
+          if (description && (description.includes('{') || description.includes('name'))) {
             try {
-              // 如果有拍卖合约地址，尝试从拍卖创建事件获取真实的最低价格
-              if (parsedMetadata.auctionContract && parsedMetadata.auctionContract !== "0x0000000000000000000000000000000000000000") {
-                try {
-                  // 获取NFT重新拍卖事件来获取正确的最低价格
-                  if (nftContractData) {
-                    const factoryAddress = "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707"; // 这里需要实际的工厂合约地址
-
-                    // 获取工厂合约的ABI
-                    if (factoryContractData) {
-                      const resaleLogs = await publicClient.getContractEvents({
-                        address: factoryContractData.address,
-                        abi: factoryContractData.abi,
-                        eventName: 'NFTResaleCreated',
-                        args: {
-                          nftTokenId: BigInt(tokenId)
-                        },
-                        fromBlock: BigInt(0),
-                      });
-
-                      if (resaleLogs && resaleLogs.length > 0) {
-                        // 获取最新的重新拍卖事件
-                        const latestResale = resaleLogs[resaleLogs.length - 1];
-                        if (latestResale.args && latestResale.args.minPrice) {
-                          minPriceValue = (Number(latestResale.args.minPrice) / 10 ** 18).toString();
-                          console.log(`从拍卖事件获取NFT ${tokenId} 的最低价格:`, minPriceValue);
-                        }
-                      }
-                    }
-                  }
-                } catch (eventError) {
-                  console.warn(`获取NFT ${tokenId} 拍卖事件失败，使用原始价格:`, eventError);
-                  // 如果无法从事件获取，使用原始的minPrice
-                  if (parsedMetadata.minPrice && parsedMetadata.minPrice !== 0n) {
-                    minPriceValue = (Number(parsedMetadata.minPrice) / 10 ** 18).toString();
-                  }
-                }
-              } else {
-                // 如果没有拍卖合约地址，使用原始的minPrice
-                if (parsedMetadata.minPrice && parsedMetadata.minPrice !== 0n) {
-                  minPriceValue = (Number(parsedMetadata.minPrice) / 10 ** 18).toString();
-                }
+              const descriptionJson = JSON.parse(description);
+              if (descriptionJson.name) {
+                parsedMetadata = {
+                  ...parsedMetadata,
+                  ...descriptionJson,
+                  image: descriptionJson.image || imageUrl
+                };
               }
             } catch (e) {
-              console.error(`NFT ${tokenId} 价格转换失败:`, e);
+              // 如果解析失败，保持原始描述
+              console.log(`NFT ${tokenId} 描述不是有效的JSON:`, description);
             }
           }
 
-          // 安全地获取创建时间
-          let createTimeValue = Date.now(); // 默认为当前时间
-          try {
-            if (parsedMetadata.createTime && parsedMetadata.createTime !== 0n) {
-              createTimeValue = Number(parsedMetadata.createTime) * 1000; // 转换为毫秒
-            }
-          } catch (e) {
-            console.error(`NFT ${tokenId} 时间转换失败:`, e);
-          }
-
-          // 安全地获取图片链接
-          let imageUrl = "";
-          if (parsedMetadata.imageHash) {
-            if (parsedMetadata.imageHash.startsWith('http')) {
-              imageUrl = parsedMetadata.imageHash;
-            } else {
-              imageUrl = `https://ipfs.io/ipfs/${parsedMetadata.imageHash}`;
-            }
-            console.log(`NFT ${tokenId} 图片URL:`, imageUrl);
-          } else {
-            console.log(`NFT ${tokenId} 没有图片哈希`);
-          }
+          const minPriceValue = minPrice ? formatEther(minPrice) : "0";
+          const createTimeValue = createTime ? Number(createTime) : Date.now();
 
           const nftItem: NFTItem = {
             tokenId: tokenId,
             name: parsedMetadata.name,
             description: parsedMetadata.description,
-            image: imageUrl,
+            image: parsedMetadata.image,
             creator: parsedMetadata.creator || "",
-            owner: owner || "",
-            isAuctioned: Boolean(parsedMetadata.isAuctioned),
+            owner: currentOwner || "",
+            isAuctioned: Boolean(isAuctioned),
             minPrice: minPriceValue,
             createTime: createTimeValue,
           };
@@ -246,154 +241,99 @@ export default function NFTMarket() {
     }
   };
 
-  // 过滤NFT
-  const filteredNFTs = allNFTs
-    .filter(nft => {
-      if (filter === "my-created") {
-        return address && nft.creator && nft.creator.toLowerCase() === address.toLowerCase();
-      }
-      if (filter === "my-owned") {
-        return address && nft.owner && nft.owner.toLowerCase() === address.toLowerCase();
-      }
-      return true; // "all"
-    })
-    .filter(nft =>
-      searchTerm === "" ||
-      nft.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      nft.description.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-
   // 分页逻辑
-  const indexOfLastItem = currentPage * itemsPerPage;
-  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentNFTs = filteredNFTs.slice(indexOfFirstItem, indexOfLastItem);
-  const totalPages = Math.max(1, Math.ceil(filteredNFTs.length / itemsPerPage)); // 确保至少有1页
-
-  // 分页跳转函数
   const paginate = (pageNumber: number) => {
-    if (pageNumber < 1) pageNumber = 1;
-    if (pageNumber > totalPages) pageNumber = totalPages;
     setCurrentPage(pageNumber);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // 获取过滤数量的函数需要使用filteredNFTs
+  // 获取过滤器数量
   const getFilterCount = (filterType: "all" | "my-created" | "my-owned") => {
-    if (filterType === "all") return allNFTs.length;
-    if (filterType === "my-created") {
-      if (!address) return 0;
-      return allNFTs.filter(nft => nft.creator && nft.creator.toLowerCase() === address.toLowerCase()).length;
+    switch (filterType) {
+      case "all":
+        return allNFTs.length;
+      case "my-created":
+        return allNFTs.filter(nft => address && nft.creator && nft.creator.toLowerCase() === address.toLowerCase()).length;
+      case "my-owned":
+        return allNFTs.filter(nft => address && nft.owner && nft.owner.toLowerCase() === address.toLowerCase()).length;
+      default:
+        return 0;
     }
-    if (filterType === "my-owned") {
-      if (!address) return 0;
-      return allNFTs.filter(nft => nft.owner && nft.owner.toLowerCase() === address.toLowerCase()).length;
-    }
-    return 0;
   };
-
-  // 当搜索或过滤条件改变时重置到第一页
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, filter]);
 
   return (
     <>
-      <MetaHeader title="NFT市场 | NFT盲拍平台" description="发现和竞拍独特的NFT作品" />
-
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 relative">
+      <MetaHeader
+        title="NFT市场 | NFT盲拍平台"
+        description="探索独一无二的数字艺术品收藏。创建、交易和收藏各种精美的NFT作品。"
+      />
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 relative overflow-hidden">
+        {/* 背景效果 */}
         <MeteorRain />
 
-        <div className="relative z-10 w-full px-4 py-8">
-          <div className="max-w-7xl mx-auto">
-            {/* 页面标题 */}
-            <div className="text-center mb-12">
-              <div className="relative inline-block">
-                <h1 className="text-5xl md:text-6xl font-bold text-white tracking-tight glow-text neon-text">
-                  NFT市场
-                </h1>
-                <div className="absolute -inset-1 bg-gradient-to-r from-purple-600/20 to-pink-600/20 blur-lg -z-10"></div>
-              </div>
-              <div className="mt-6 flex justify-center">
-                <div className="h-1 w-32 bg-gradient-to-r from-purple-500 via-pink-500 to-purple-500 rounded-full relative">
-                  <div className="absolute inset-0 bg-gradient-to-r from-purple-400 to-pink-400 rounded-full blur-sm"></div>
-                </div>
-              </div>
-              <p className="mt-6 text-slate-300/80 text-lg max-w-2xl mx-auto leading-relaxed">
-                发现和竞拍独特的NFT作品，体验去中心化的数字艺术品交易
-              </p>
+        {/* 主要内容 */}
+        <div className="relative z-10 container mx-auto px-4 py-8">
+          {/* 页面标题 */}
+          <div className="text-center mb-12">
+            <div className="relative inline-block">
+              <h1 className="text-4xl md:text-5xl font-bold text-white tracking-tight glow-text neon-text">
+                NFT市场
+              </h1>
+              <div className="absolute -inset-1 bg-gradient-to-r from-purple-600/20 to-pink-600/20 blur-lg -z-10"></div>
             </div>
+            <div className="mt-4 flex justify-center">
+              <div className="h-1 w-24 bg-gradient-to-r from-purple-500 via-pink-500 to-purple-500 rounded-full relative">
+                <div className="absolute inset-0 bg-gradient-to-r from-purple-400 to-pink-400 rounded-full blur-sm"></div>
+              </div>
+            </div>
+            <p className="mt-4 text-slate-300/80 text-base max-w-2xl mx-auto leading-relaxed">
+              探索独一无二的数字艺术品收藏。创建、交易和收藏各种精美的NFT作品。
+            </p>
+          </div>
 
-            {/* 搜索和筛选区域 */}
-            <div className="mb-8 flex flex-col md:flex-row gap-4 items-center justify-between">
+          {/* 搜索和过滤器 */}
+          <div className="mb-8">
+            <div className="flex flex-col lg:flex-row gap-4 items-center justify-between">
               {/* 搜索框 */}
               <div className="relative flex-1 max-w-md">
-                <MagnifyingGlassIcon className="absolute left-4 top-1/2 transform -translate-y-1/2 h-5 w-5 text-slate-400" />
                 <input
                   type="text"
                   placeholder="搜索NFT名称或描述..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3.5 bg-slate-800/40 backdrop-blur-xl border border-slate-600/50 rounded-2xl text-white placeholder-slate-400 focus:border-purple-500/70 focus:outline-none focus:ring-2 focus:ring-purple-500/30 focus:bg-slate-800/60 transition-all duration-300 shadow-lg hover:shadow-purple-500/10"
+                  className="w-full px-4 py-3 bg-slate-800/50 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent backdrop-blur-sm"
                 />
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 absolute right-3 top-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
               </div>
 
-              {/* 筛选按钮 */}
-              <div className="flex gap-3 flex-wrap">
-                <button
-                  onClick={() => setFilter("all")}
-                  className={`group relative px-6 py-3 rounded-2xl font-semibold transition-all duration-300 transform hover:scale-105 ${filter === "all"
-                    ? "bg-gradient-to-r from-purple-600 via-purple-500 to-pink-600 text-white shadow-lg shadow-purple-500/30 hover:shadow-purple-500/40"
-                    : "bg-slate-800/50 backdrop-blur-xl text-slate-300 hover:text-white hover:bg-slate-700/60 border border-slate-600/30 hover:border-slate-500/50 shadow-lg hover:shadow-slate-500/20"
-                    }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <SparklesIcon className={`h-4 w-4 transition-all duration-300 ${filter === "all" ? "text-white" : "text-purple-400 group-hover:text-purple-300"}`} />
-                    <span>全部 ({getFilterCount("all")})</span>
-                  </div>
-                  {filter === "all" && (
-                    <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-purple-600/20 to-pink-600/20 blur-xl -z-10"></div>
-                  )}
-                </button>
-
-                {address && (
-                  <>
-                    <button
-                      onClick={() => setFilter("my-created")}
-                      className={`group relative px-6 py-3 rounded-2xl font-semibold transition-all duration-300 transform hover:scale-105 ${filter === "my-created"
-                        ? "bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-600 text-white shadow-lg shadow-blue-500/30 hover:shadow-blue-500/40"
-                        : "bg-slate-800/50 backdrop-blur-xl text-slate-300 hover:text-white hover:bg-slate-700/60 border border-slate-600/30 hover:border-slate-500/50 shadow-lg hover:shadow-slate-500/20"
-                        }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <FireIcon className={`h-4 w-4 transition-all duration-300 ${filter === "my-created" ? "text-white" : "text-blue-400 group-hover:text-blue-300"}`} />
-                        <span>我创建的 ({getFilterCount("my-created")})</span>
-                      </div>
-                      {filter === "my-created" && (
-                        <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-blue-600/20 to-cyan-600/20 blur-xl -z-10"></div>
-                      )}
-                    </button>
-
-                    <button
-                      onClick={() => setFilter("my-owned")}
-                      className={`group relative px-6 py-3 rounded-2xl font-semibold transition-all duration-300 transform hover:scale-105 ${filter === "my-owned"
-                        ? "bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/30 hover:shadow-emerald-500/40"
-                        : "bg-slate-800/50 backdrop-blur-xl text-slate-300 hover:text-white hover:bg-slate-700/60 border border-slate-600/30 hover:border-slate-500/50 shadow-lg hover:shadow-slate-500/20"
-                        }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <ShoppingBagIcon className={`h-4 w-4 transition-all duration-300 ${filter === "my-owned" ? "text-white" : "text-emerald-400 group-hover:text-emerald-300"}`} />
-                        <span>我拥有的 ({getFilterCount("my-owned")})</span>
-                      </div>
-                      {filter === "my-owned" && (
-                        <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-emerald-600/20 to-teal-600/20 blur-xl -z-10"></div>
-                      )}
-                    </button>
-                  </>
-                )}
+              {/* 过滤器 */}
+              <div className="flex gap-2">
+                {[
+                  { key: "all", label: "全部" },
+                  { key: "my-created", label: "我创建的" },
+                  { key: "my-owned", label: "我拥有的" }
+                ].map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => setFilter(key as any)}
+                    className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 ${filter === key
+                      ? "bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg"
+                      : "bg-slate-800/50 text-slate-300 hover:bg-slate-700/50 hover:text-white"
+                      }`}
+                  >
+                    {label}
+                    <span className="bg-white/20 text-xs px-1.5 py-0.5 rounded-full">
+                      {getFilterCount(key as any)}
+                    </span>
+                  </button>
+                ))}
               </div>
             </div>
+          </div>
 
-            {/* NFT网格 */}
+          {/* NFT网格 */}
+          <div className="min-h-[400px]">
             {loading ? (
               <div className="flex flex-col justify-center items-center py-20">
                 <div className="w-16 h-16 relative">
@@ -413,34 +353,22 @@ export default function NFTMarket() {
                       {/* NFT图片 */}
                       <div className="relative h-56 bg-slate-800/50 overflow-hidden">
                         {nft.image ? (
-                          <>
-                            <img
-                              src={nft.image}
-                              alt={nft.name}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                              onLoad={() => {
-                                console.log(`NFT ${nft.tokenId} 图片加载成功:`, nft.image);
-                              }}
-                              onError={(e) => {
-                                console.error(`NFT ${nft.tokenId} 图片加载失败:`, nft.image);
-                                console.error("图片错误详情:", e);
-                                e.currentTarget.style.display = 'none';
-                                const placeholder = e.currentTarget.nextElementSibling as HTMLElement;
-                                if (placeholder) {
-                                  placeholder.classList.remove('hidden');
-                                }
-                              }}
-                            />
-                            <div className="hidden flex items-center justify-center h-full text-slate-400 bg-gradient-to-br from-slate-800 to-slate-900 flex-col">
-                              <SparklesIcon className="h-16 w-16 mb-2" />
-                              <p className="text-xs text-center px-2">图片加载失败</p>
-                              {nft.image && (
-                                <p className="text-xs text-center px-2 mt-1 break-all opacity-50">
-                                  {nft.image.slice(0, 50)}...
-                                </p>
-                              )}
-                            </div>
-                          </>
+                          <OptimizedImage
+                            src={nft.image}
+                            alt={nft.name}
+                            className="w-full h-full group-hover:scale-105 transition-transform duration-500"
+                            width={400}
+                            height={300}
+                            quality={85}
+                            objectFit="cover"
+                            rounded="rounded-t-xl"
+                            onLoad={() => {
+                              console.log(`NFT ${nft.tokenId} 图片加载成功`);
+                            }}
+                            onError={(error) => {
+                              console.error(`NFT ${nft.tokenId} 图片加载失败:`, error);
+                            }}
+                          />
                         ) : (
                           <div className="flex items-center justify-center h-full text-slate-400 bg-gradient-to-br from-slate-800 to-slate-900 flex-col">
                             <SparklesIcon className="h-16 w-16 mb-2" />
@@ -519,7 +447,12 @@ export default function NFTMarket() {
                           <div className="flex items-center justify-between text-xs">
                             <span className="text-slate-500">最低价格:</span>
                             {nft.isAuctioned ? (
-                              <span className="text-green-400 font-medium">{nft.minPrice} ETH</span>
+                              <span className="text-green-400 font-medium">
+                                {parseFloat(nft.minPrice).toLocaleString('en-US', {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 6
+                                })} ETH
+                              </span>
                             ) : (
                               <span className="text-slate-400">未设定价格</span>
                             )}
@@ -562,7 +495,7 @@ export default function NFTMarket() {
                   ))}
                 </div>
 
-                {/* 分页组件 - 简化为一行 */}
+                {/* 分页组件 */}
                 <div className="mt-8 flex justify-center items-center">
                   <div className="inline-flex items-center gap-3 px-6 py-3 bg-slate-800/40 backdrop-blur-xl border border-slate-600/30 rounded-2xl shadow-lg">
                     {/* 首页按钮 */}
@@ -627,39 +560,107 @@ export default function NFTMarket() {
                 </div>
               </>
             ) : (
-              <div className="text-center py-16 bg-slate-900/50 backdrop-blur-lg rounded-2xl border border-slate-700/50">
-                <div className="relative inline-block p-6 bg-purple-600/10 rounded-2xl mb-6">
-                  <SparklesIcon className="h-16 w-16 text-purple-400 mx-auto" />
-                  <div className="absolute inset-0 bg-gradient-to-br from-purple-600/5 to-pink-600/5 rounded-2xl blur-xl"></div>
-                </div>
-                <h3 className="text-2xl font-bold text-white mb-4">
-                  {searchTerm ? "未找到匹配的NFT" : allNFTs.length === 0 ? "暂无NFT" : "未找到符合条件的NFT"}
+              <div className="text-center py-20">
+                <div className="text-6xl mb-4 opacity-50">🎨</div>
+                <h3 className="text-xl font-semibold text-slate-200 mb-2">
+                  暂无NFT
                 </h3>
-                <p className="text-slate-400 mb-8 max-w-md mx-auto">
+                <p className="text-slate-400">
                   {searchTerm
-                    ? `没有找到匹配"${searchTerm}"的NFT，尝试调整搜索条件`
-                    : allNFTs.length === 0
-                      ? "当前没有任何NFT，快来创建第一个NFT吧！"
-                      : "当前没有符合筛选条件的NFT"}
+                    ? `没有找到匹配"${searchTerm}"的NFT`
+                    : `当前${filter === "all" ? "" : "您"}还没有任何NFT`}
                 </p>
-                <div className="flex flex-col sm:flex-row justify-center gap-4">
+                {filter !== "all" && (
                   <Link
                     href="/mint-nft"
-                    className="group relative inline-flex items-center px-8 py-4 bg-gradient-to-r from-purple-600 via-purple-500 to-pink-600 hover:from-purple-500 hover:via-purple-400 hover:to-pink-500 text-white rounded-2xl font-bold transition-all duration-300 transform hover:scale-105 shadow-xl shadow-purple-500/30 hover:shadow-purple-500/50 overflow-hidden"
+                    className="inline-block mt-4 px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg hover:from-purple-700 hover:to-pink-700 transition-all duration-200"
                   >
-                    <div className="relative z-10 flex items-center gap-3">
-                      <SparklesIcon className="h-6 w-6 animate-pulse" />
-                      <span>创建NFT</span>
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 transition-transform duration-300 group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
-                      </svg>
-                    </div>
-                    <div className="absolute inset-0 bg-gradient-to-r from-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                    <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-purple-600/20 to-pink-600/20 blur-xl -z-10"></div>
+                    立即铸造NFT
                   </Link>
-                </div>
+                )}
               </div>
             )}
+          </div>
+        </div>
+
+        {/* 知名NFT创作者展示区 */}
+        <div className="mt-16 mb-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+          <div className="text-center mb-10">
+            <h2 className="text-2xl font-bold text-white mb-2 glow-text">探索NFT艺术大师</h2>
+            <p className="text-slate-400">发现世界顶级NFT艺术家的创作之旅</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {/* Beeple */}
+            <a href="https://www.beeple-crap.com" target="_blank" rel="noopener noreferrer"
+              className="group bg-slate-800/40 backdrop-blur-xl border border-slate-600/30 rounded-2xl p-6 hover:bg-slate-700/40 transition-all duration-300">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+                  <span className="text-2xl">🎨</span>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white group-hover:text-purple-400 transition-colors">Beeple</h3>
+                  <p className="text-sm text-slate-400">数字艺术先驱</p>
+                </div>
+              </div>
+              <p className="text-sm text-slate-300 line-clamp-2">创造了价值6900万美元的NFT作品《Everydays》，开创了数字艺术新纪元。</p>
+            </a>
+
+            {/* Tyler Hobbs */}
+            <a href="https://tylerxhobbs.com" target="_blank" rel="noopener noreferrer"
+              className="group bg-slate-800/40 backdrop-blur-xl border border-slate-600/30 rounded-2xl p-6 hover:bg-slate-700/40 transition-all duration-300">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-green-500 to-blue-600 flex items-center justify-center">
+                  <span className="text-2xl">🤖</span>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white group-hover:text-purple-400 transition-colors">Tyler Hobbs</h3>
+                  <p className="text-sm text-slate-400">算法艺术大师</p>
+                </div>
+              </div>
+              <p className="text-sm text-slate-300 line-clamp-2">Fidenza系列创作者，将算法艺术带入NFT主流市场。</p>
+            </a>
+
+            {/* XCOPY */}
+            <a href="https://superrare.com/xcopy" target="_blank" rel="noopener noreferrer"
+              className="group bg-slate-800/40 backdrop-blur-xl border border-slate-600/30 rounded-2xl p-6 hover:bg-slate-700/40 transition-all duration-300">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-red-500 to-orange-600 flex items-center justify-center">
+                  <span className="text-2xl">👾</span>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white group-hover:text-purple-400 transition-colors">XCOPY</h3>
+                  <p className="text-sm text-slate-400">故障艺术大师</p>
+                </div>
+              </div>
+              <p className="text-sm text-slate-300 line-clamp-2">以独特的故障艺术风格著称，作品充满未来主义色彩。</p>
+            </a>
+
+            {/* FEWOCiOUS */}
+            <a href="https://fewo.world" target="_blank" rel="noopener noreferrer"
+              className="group bg-slate-800/40 backdrop-blur-xl border border-slate-600/30 rounded-2xl p-6 hover:bg-slate-700/40 transition-all duration-300">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center">
+                  <span className="text-2xl">🎭</span>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white group-hover:text-purple-400 transition-colors">FEWOCiOUS</h3>
+                  <p className="text-sm text-slate-400">新生代艺术家</p>
+                </div>
+              </div>
+              <p className="text-sm text-slate-300 line-clamp-2">18岁创造NFT拍卖纪录，展现数字原生一代的艺术潜力。</p>
+            </a>
+          </div>
+
+          {/* 更多链接 */}
+          <div className="mt-8 text-center">
+            <a href="https://artblocks.io" target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 text-purple-400 hover:text-purple-300 transition-colors">
+              <span>探索更多艺术家</span>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+              </svg>
+            </a>
           </div>
         </div>
       </div>
@@ -675,14 +676,6 @@ export default function NFTMarket() {
         }
         .neon-text {
           text-shadow: 0 0 10px rgba(168, 85, 247, 0.7), 0 0 20px rgba(168, 85, 247, 0.5);
-        }
-        
-        /* 限制文本行数 */
-        .line-clamp-2 {
-          display: -webkit-box;
-          -webkit-line-clamp: 2;
-          -webkit-box-orient: vertical;
-          overflow: hidden;
         }
       `}</style>
     </>

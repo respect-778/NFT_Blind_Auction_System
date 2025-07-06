@@ -63,6 +63,20 @@ function CreateAuctionContent() {
     }
   }, [searchParams, userNFTs]);
 
+  // 监听NFT选择变化，重置拍卖设置表单
+  useEffect(() => {
+    if (selectedNFT) {
+      // 当选择新NFT时，清空拍卖设置表单
+      setMinPrice("");
+      setStartDate("");
+      setStartTime("");
+      setBiddingDuration("");
+      setRevealDuration("");
+
+      console.log(`选择了NFT #${selectedNFT.tokenId}，已重置拍卖设置表单`);
+    }
+  }, [selectedNFT?.tokenId]); // 只监听 tokenId 变化，避免无限循环
+
   const loadUserNFTs = async () => {
     if (!address || !nftContractData || !publicClient) return;
 
@@ -227,7 +241,12 @@ function CreateAuctionContent() {
       });
 
       console.log("Transaction hash:", tx);
-      notification.success(`NFT拍卖创建成功！交易哈希: ${tx}`);
+
+      // 等待交易确认
+      notification.info("等待交易确认...");
+      await publicClient.waitForTransactionReceipt({ hash: tx });
+
+      notification.success(`NFT拍卖创建成功！可以去所有拍卖页面查看了！`);
 
       // 清空表单
       setMinPrice("");
@@ -237,19 +256,17 @@ function CreateAuctionContent() {
       setRevealDuration("");
       setSelectedNFT(null);
 
-      // 重新加载NFT列表以更新界面状态
+      // 清理相关缓存以确保获取最新状态
       if (address) {
-        // 清理相关缓存以确保获取最新状态
         const normalizedAddress = address.toLowerCase();
         localStorage.removeItem(`user_nfts_${normalizedAddress}`);
       }
+
+      // 重新加载NFT列表
       await loadUserNFTs();
 
-      notification.info("NFT列表已更新，拍卖已创建成功！");
-
-      // setTimeout(() => {
-      //   router.push("/nft-market");
-      // }, 2000);
+      // 滚动到页面顶部
+      window.scrollTo({ top: 0, behavior: 'smooth' });
 
     } catch (error: any) {
       console.error("创建拍卖失败:", error);

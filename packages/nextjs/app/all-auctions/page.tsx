@@ -11,6 +11,8 @@ import { notification } from "~~/utils/scaffold-eth";
 import { formatEther } from 'viem';
 import { useAccount } from "wagmi";
 import SimpleImageShowcase3D from "~~/components/SimpleImageShowcase3D";
+import OptimizedImage from "~~/components/OptimizedImage";
+import { useImagePreloader } from "~~/utils/imageCache";
 
 type AuctionState = "pending" | "bidding" | "revealing" | "ended";
 type Auction = {
@@ -45,6 +47,9 @@ const AllAuctions = () => {
   const { data: nftContractData } = useDeployedContractInfo("AuctionNFT");
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient({ chainId: targetNetwork.id });
+
+  // 图片预加载Hook
+  const { preloadImages } = useImagePreloader();
 
   // 加载拍卖列表
   useEffect(() => {
@@ -383,13 +388,31 @@ const AllAuctions = () => {
       searchTerm === "" ||
       auction.metadata.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       auction.metadata.description.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    )
+    // 按创建时间降序排序，最新创建的拍卖在前面
+    .sort((a, b) => {
+      // 如果有biddingStart时间，使用它作为创建时间
+      const timeA = a.biddingStart ? Number(a.biddingStart) : 0;
+      const timeB = b.biddingStart ? Number(b.biddingStart) : 0;
+      return timeB - timeA; // 降序排序，最新的在前面
+    });
 
   // 分页逻辑
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
   const currentAuctions = filteredAuctions.slice(indexOfFirstItem, indexOfLastItem);
   const totalPages = Math.max(1, Math.ceil(filteredAuctions.length / itemsPerPage)); // 确保至少有1页
+
+  // 预加载当前页面图片
+  useEffect(() => {
+    const imageUrls = currentAuctions
+      .map(auction => auction.metadata.image)
+      .filter(Boolean);
+
+    if (imageUrls.length > 0) {
+      preloadImages(imageUrls, 3); // 并发加载3个图片
+    }
+  }, [currentAuctions, preloadImages]);
 
   // 分页跳转函数
   const paginate = (pageNumber: number) => {
@@ -463,6 +486,58 @@ const AllAuctions = () => {
       };
     }
   }, [previewAuction, showImageShowcase]);
+
+  // 添加格式化时间的函数
+  const formatEndTime = (timestamp: bigint) => {
+    const date = new Date(Number(timestamp) * 1000);
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).replace(/\//g, '-');
+  };
+
+  // 修改显示拍卖状态的函数
+  const getAuctionTimeDisplay = (auction: Auction) => {
+    if (auction.state === "ended") {
+      return formatEndTime(auction.revealEnd);
+    } else if (auction.state === "revealing") {
+      const timeLeft = Number(auction.revealEnd) - Math.floor(Date.now() / 1000);
+      if (timeLeft > 0) {
+        return formatTimeLeft(timeLeft);
+      } else {
+        return formatEndTime(auction.revealEnd);
+      }
+    } else if (auction.state === "bidding") {
+      const timeLeft = Number(auction.biddingEnd) - Math.floor(Date.now() / 1000);
+      if (timeLeft > 0) {
+        return formatTimeLeft(timeLeft);
+      } else {
+        return formatEndTime(auction.biddingEnd);
+      }
+    } else {
+      return formatEndTime(auction.biddingStart || BigInt(0));
+    }
+  };
+
+  // 添加格式化剩余时间的函数
+  const formatTimeLeft = (seconds: number): string => {
+    if (seconds <= 0) return "0秒";
+
+    const days = Math.floor(seconds / (24 * 60 * 60));
+    const hours = Math.floor((seconds % (24 * 60 * 60)) / (60 * 60));
+    const minutes = Math.floor((seconds % (60 * 60)) / 60);
+
+    let result = "";
+    if (days > 0) result += `${days}天`;
+    if (hours > 0) result += `${hours}小时`;
+    if (minutes > 0) result += `${minutes}分钟`;
+
+    return result || "1分钟内";
+  };
 
   return (
     <>
@@ -625,10 +700,21 @@ const AllAuctions = () => {
                     {/* 图片区域 */}
                     <div className="relative h-48 overflow-hidden rounded-t-2xl bg-purple-800/20">
                       {auction.metadata.image ? (
-                        <img
+                        <OptimizedImage
                           src={auction.metadata.image}
                           alt={auction.metadata.name}
-                          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
+                          className="w-full h-full transition-transform duration-300 group-hover:scale-110"
+                          width={400}
+                          height={200}
+                          quality={80}
+                          objectFit="cover"
+                          rounded="rounded-t-2xl"
+                          onLoad={() => {
+                            console.log(`拍卖 ${auction.address} 图片加载成功`);
+                          }}
+                          onError={(error) => {
+                            console.error(`拍卖 ${auction.address} 图片加载失败:`, error);
+                          }}
                         />
                       ) : (
                         <div className="flex items-center justify-center h-full text-purple-400/50">
@@ -669,13 +755,10 @@ const AllAuctions = () => {
                           <Address address={auction.beneficiary} format="short" />
                         </div>
 
-                        <div className="flex justify-between items-center text-xs text-purple-300/60">
-                          <span>结束时间</span>
-                          <span>
-                            {auction.state === "pending" ? "未开始" :
-                              auction.state === "bidding" ? new Date(Number(auction.biddingEnd) * 1000).toLocaleDateString() :
-                                auction.state === "revealing" ? new Date(Number(auction.revealEnd) * 1000).toLocaleDateString() :
-                                  "已结束"}
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-slate-400">结束时间:</span>
+                          <span className={`${auction.state === "ended" ? "text-slate-400" : "text-blue-400"}`}>
+                            {getAuctionTimeDisplay(auction)}
                           </span>
                         </div>
                       </div>

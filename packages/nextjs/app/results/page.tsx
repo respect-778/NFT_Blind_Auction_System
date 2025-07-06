@@ -10,6 +10,7 @@ import { notification } from "~~/utils/scaffold-eth";
 import { Address } from "~~/components/scaffold-eth";
 import { MetaHeader } from "~~/components/MetaHeader";
 import { formatEther } from 'viem';
+import { handleTransactionError, handleTransactionStatus } from "~~/utils/transactionErrorHandler";
 
 // 添加格式化时间的函数
 const formatTime = (timestamp: any) => {
@@ -388,12 +389,14 @@ function ResultsContent() {
       const signer = await provider.getSigner();
       const contract = new ethers.Contract(auctionAddress, blindAuctionData.abi, signer);
 
+      handleTransactionStatus.submitted("提取押金");
+
       // 执行取款操作
       const tx = await contract.withdraw();
       const receipt = await tx.wait();
 
       if (receipt.status === 1) {
-        notification.success("押金提取成功！");
+        handleTransactionStatus.confirmed("提取押金");
 
         // 记录已提取状态 - 使用标准化地址
         const normalizedAddress = address.toLowerCase();
@@ -406,8 +409,8 @@ function ResultsContent() {
       } else {
         notification.error("交易失败，请重试");
       }
-    } catch (error) {
-      notification.error("押金提取失败");
+    } catch (error: any) {
+      handleTransactionError(error, "提取押金");
     } finally {
       setIsWithdrawing(false);
     }
@@ -467,6 +470,8 @@ function ResultsContent() {
 
       const signer = await provider.getSigner();
       const contract = new ethers.Contract(auctionAddress, blindAuctionData.abi, signer);
+
+      handleTransactionStatus.submitted("结束拍卖");
 
       // 执行结束拍卖操作
       console.log("🚀 开始执行拍卖结束交易...");
@@ -547,7 +552,7 @@ function ResultsContent() {
       }
     } catch (error: any) {
       console.error("❌ 结束拍卖失败:", error);
-      notification.error(`结束拍卖失败: ${error.message || "请确保揭示阶段已结束"}`);
+      handleTransactionError(error, "结束拍卖");
       setIsTransferring(false);
     } finally {
       setIsEndingAuction(false);
