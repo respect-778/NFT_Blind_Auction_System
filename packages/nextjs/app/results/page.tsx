@@ -63,6 +63,11 @@ function ResultsContent() {
   const [timeLeft, setTimeLeft] = useState<string>("00:00:00");
   const [auctionEndCalled, setAuctionEndCalled] = useState<boolean>(false);
 
+  // 添加交易历史相关状态
+  const [showTransactionHistory, setShowTransactionHistory] = useState(false);
+  const [transactionHistory, setTransactionHistory] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
   // NFT相关状态
   const [isNFTAuction, setIsNFTAuction] = useState<boolean>(false);
   const [nftTokenId, setNftTokenId] = useState<number>(0);
@@ -120,6 +125,265 @@ function ResultsContent() {
       return "0 ETH";
     } catch (error) {
       return "0 ETH";
+    }
+  };
+
+  // 获取交易历史
+  const fetchTransactionHistory = async () => {
+    if (!publicClient || !blindAuctionData || !auctionAddress) {
+      notification.error("无法获取交易历史：缺少必要信息");
+      return;
+    }
+
+    setLoadingHistory(true);
+    try {
+      console.log("开始从合约存储获取拍卖交易历史...");
+
+      // 首先获取当前的最高出价信息
+      const [currentHighestBidder, currentHighestBid] = await Promise.all([
+        publicClient.readContract({
+          address: auctionAddress,
+          abi: blindAuctionData.abi,
+          functionName: 'highestBidder',
+        }).catch(e => "0x0000000000000000000000000000000000000000"),
+        publicClient.readContract({
+          address: auctionAddress,
+          abi: blindAuctionData.abi,
+          functionName: 'highestBid',
+        }).catch(e => BigInt(0)),
+      ]);
+
+      const currentHighestBidFormatted = formatEth(currentHighestBid as bigint);
+
+      console.log("当前最高出价者和出价:");
+      console.log("- 最高出价者地址:", currentHighestBidder);
+      console.log("- 最高出价金额:", currentHighestBid);
+      console.log("- 格式化后出价:", currentHighestBidFormatted);
+
+      // 策略1: 从localStorage收集所有可能的参与者地址
+      let participantAddresses = new Set<string>();
+
+      // 添加已知的重要地址
+      if (address) {
+        participantAddresses.add(address);
+      }
+      if (currentHighestBidder && currentHighestBidder !== "0x0000000000000000000000000000000000000000") {
+        participantAddresses.add(currentHighestBidder as string);
+      }
+      if (beneficiary) {
+        participantAddresses.add(beneficiary);
+      }
+
+      // 从localStorage收集所有用户的出价记录，寻找参与这个拍卖的地址
+      try {
+        console.log("从localStorage收集参与者地址...");
+        const allStorageKeys = Object.keys(localStorage);
+
+        for (const key of allStorageKeys) {
+          if (key.startsWith('bids_')) {
+            try {
+              const bidData = JSON.parse(localStorage.getItem(key) || '[]');
+              if (Array.isArray(bidData)) {
+                bidData.forEach((bid: any) => {
+                  if (bid.auctionAddress?.toLowerCase() === auctionAddress.toLowerCase()) {
+                    // 从存储key中提取用户地址
+                    const userAddress = key.replace('bids_', '');
+                    participantAddresses.add(userAddress);
+                    console.log(`从localStorage发现参与者: ${userAddress}`);
+                  }
+                });
+              }
+            } catch (e) {
+              console.warn(`解析localStorage key ${key} 失败:`, e);
+            }
+          }
+        }
+      } catch (error) {
+        console.warn("从localStorage收集参与者地址失败:", error);
+      }
+
+      // 策略2: 尝试从最近的事件日志获取更多参与者（限制范围避免请求过多）
+      try {
+        console.log("从最近事件日志补充参与者地址...");
+        const currentBlock = await publicClient.getBlockNumber();
+        const searchFromBlock = currentBlock > 1000n ? currentBlock - 1000n : 0n;
+
+        const recentBidEvents = await publicClient.getContractEvents({
+          address: auctionAddress,
+          abi: blindAuctionData.abi,
+          eventName: 'BidSubmitted',
+          fromBlock: searchFromBlock,
+          toBlock: currentBlock,
+        });
+
+        recentBidEvents.forEach((event: any) => {
+          if (event.args?.bidder) {
+            participantAddresses.add(event.args.bidder);
+            console.log(`从事件日志发现参与者: ${event.args.bidder}`);
+          }
+        });
+      } catch (eventError) {
+        console.warn("从事件日志获取参与者失败:", eventError);
+      }
+
+      console.log(`总共发现 ${participantAddresses.size} 个候选参与者`);
+
+      // 策略3: 验证每个候选地址是否真的有出价
+      const participantChecks = await Promise.all(
+        Array.from(participantAddresses).map(async (candidateAddress) => {
+          try {
+            const bidCount = await publicClient.readContract({
+              address: auctionAddress,
+              abi: blindAuctionData.abi,
+              functionName: 'getBidCount',
+              args: [candidateAddress as `0x${string}`],
+            }) as bigint;
+
+            const bidCountNum = Number(bidCount);
+            if (bidCountNum > 0) {
+              console.log(`✅ ${candidateAddress} 有 ${bidCountNum} 个出价`);
+              return candidateAddress;
+            } else {
+              console.log(`❌ ${candidateAddress} 没有出价`);
+              return null;
+            }
+          } catch (error) {
+            console.warn(`检查 ${candidateAddress} 出价数量失败:`, error);
+            return null;
+          }
+        })
+      );
+
+      // 过滤出真正有出价的参与者
+      const validParticipants = participantChecks.filter(Boolean) as string[];
+      console.log(`确认有效参与者 ${validParticipants.length} 个:`, validParticipants);
+
+      if (validParticipants.length === 0) {
+        console.log("未找到任何有效的参与者");
+        setTransactionHistory([]);
+        return;
+      }
+
+      // 为每个有效参与者获取详细的合约数据
+      const historyData = await Promise.all(
+        validParticipants.map(async (bidderAddress) => {
+          try {
+            console.log(`获取 ${bidderAddress} 的详细合约数据...`);
+
+            // 从合约直接读取用户的出价数量（我们已经知道>0）
+            const bidCount = await publicClient.readContract({
+              address: auctionAddress,
+              abi: blindAuctionData.abi,
+              functionName: 'getBidCount',
+              args: [bidderAddress as `0x${string}`],
+            }) as bigint;
+
+            const bidCountNum = Number(bidCount);
+
+            // 读取用户的所有出价记录
+            let totalDeposit = 0n;
+            const bids = [];
+
+            for (let i = 0; i < bidCountNum; i++) {
+              try {
+                const bidData = await publicClient.readContract({
+                  address: auctionAddress,
+                  abi: blindAuctionData.abi,
+                  functionName: 'bids',
+                  args: [bidderAddress as `0x${string}`, BigInt(i)],
+                }) as [string, bigint]; // [blindedBid, deposit]
+
+                const [blindedBid, deposit] = bidData;
+                totalDeposit += deposit;
+
+                bids.push({
+                  index: i,
+                  blindedBid,
+                  deposit,
+                  // 检查是否已被重置（揭示后会重置为bytes32(0)）
+                  isRevealed: blindedBid === "0x0000000000000000000000000000000000000000000000000000000000000000"
+                });
+              } catch (bidError) {
+                console.warn(`获取出价 ${i} 失败:`, bidError);
+              }
+            }
+
+            // 判断用户是否已揭示（通过检查出价是否被重置）
+            const hasRevealed = bids.some(bid => bid.isRevealed);
+
+            // 统计有效出价数量（已揭示的出价）
+            const revealedBidsCount = bids.filter(bid => bid.isRevealed).length;
+
+            // 判断是否是最高出价者
+            const isHighestBidder = bidderAddress.toLowerCase() === (currentHighestBidder as string)?.toLowerCase();
+
+            console.log(`用户 ${bidderAddress}:`);
+            console.log(`- 当前最高出价者: ${currentHighestBidder}`);
+            console.log(`- 是否为最高出价者: ${isHighestBidder}`);
+            console.log(`- 已揭示: ${hasRevealed}`);
+            console.log(`- 有效出价数: ${revealedBidsCount}`);
+
+            return {
+              address: bidderAddress,
+              totalDeposit,
+              bids,
+              hasRevealed,
+              hasValidBid: revealedBidsCount > 0, // 是否有有效出价
+              isHighestBidder, // 是否是最高出价者
+              // 显示逻辑：最高出价者显示具体金额，其他人根据状态显示
+              bidAmount: isHighestBidder
+                ? currentHighestBidFormatted
+                : hasRevealed
+                  ? `低于 ${currentHighestBidFormatted}`
+                  : "未出价"
+            };
+          } catch (error) {
+            console.error(`获取 ${bidderAddress} 数据失败:`, error);
+            return null;
+          }
+        })
+      );
+
+      // 去重并过滤有效数据，按地址去重
+      const uniqueHistoryData = new Map();
+      historyData.filter(Boolean).forEach(item => {
+        if (item && !uniqueHistoryData.has(item.address.toLowerCase())) {
+          uniqueHistoryData.set(item.address.toLowerCase(), item);
+        }
+      });
+
+      // 转换为数组并按押金排序，最高出价者优先
+      const validHistoryData = Array.from(uniqueHistoryData.values())
+        .sort((a, b) => {
+          // 最高出价者排在第一位
+          if (a.isHighestBidder && !b.isHighestBidder) return -1;
+          if (!a.isHighestBidder && b.isHighestBidder) return 1;
+          // 其他按总押金排序
+          return Number(b.totalDeposit - a.totalDeposit);
+        });
+
+      setTransactionHistory(validHistoryData as any[]);
+      console.log("处理后的交易历史:", validHistoryData);
+
+      if (validHistoryData.length === 0) {
+        console.log("未找到任何交易记录");
+      } else {
+        console.log(`成功获取 ${validHistoryData.length} 个参与者的交易历史`);
+      }
+
+    } catch (error) {
+      console.error("获取交易历史失败:", error);
+      notification.error("获取交易历史失败，请稍后重试");
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  // 处理查看交易历史按钮点击
+  const handleViewTransactionHistory = () => {
+    setShowTransactionHistory(true);
+    if (transactionHistory.length === 0) {
+      fetchTransactionHistory();
     }
   };
 
@@ -666,7 +930,7 @@ function ResultsContent() {
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-slate-400 text-sm">受益人</span>
-                <span className="text-white text-sm">
+                <span className="text-white text-sm font-medium tracking-wide">
                   {beneficiary ? formatAddress(beneficiary) : "未知"}
                 </span>
               </div>
@@ -809,6 +1073,100 @@ function ResultsContent() {
                 </div>
               )}
 
+              {/* 竞拍失败但参与了的用户安慰横幅 */}
+              {address && phase === 2 && highestBidder && highestBidder !== '0x0000000000000000000000000000000000000000' &&
+                address.toLowerCase() !== highestBidder.toLowerCase() &&
+                address.toLowerCase() !== beneficiary?.toLowerCase() &&
+                hasPendingReturn && (
+                  <div className="bg-gradient-to-r from-amber-900/80 via-orange-800/70 to-red-900/80 backdrop-blur-md rounded-2xl border border-amber-500/50 shadow-2xl relative overflow-hidden mb-6">
+                    {/* 背景装饰 */}
+                    <div className="absolute inset-0 bg-[linear-gradient(rgba(245,158,11,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(245,158,11,0.05)_1px,transparent_1px)] bg-[size:20px_20px]"></div>
+
+                    <div className="p-6 relative z-10 flex items-center gap-4">
+                      <div className="w-16 h-16 bg-gradient-to-br from-amber-500/30 to-orange-500/30 rounded-full flex items-center justify-center">
+                        <span className="text-3xl">🤝</span>
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="text-2xl font-bold text-white mb-1">💪 感谢您的参与！</h3>
+                        <p className="text-amber-200">虽然这次没有获胜，但您的参与让拍卖更加精彩！您的押金可以随时提取。</p>
+                        <p className="text-amber-300 text-sm mt-1">✨ 每一次参与都是宝贵的经验，期待您在下次拍卖中的精彩表现！</p>
+                      </div>
+                      <div className="flex gap-3">
+                        {/* 失败用户的提取押金按钮 */}
+                        <button
+                          onClick={handleWithdraw}
+                          disabled={isWithdrawing || !hasPendingReturn}
+                          className="group relative px-6 py-3 rounded-2xl font-semibold transition-all duration-300 transform hover:scale-105 bg-gradient-to-r from-amber-600 via-amber-500 to-orange-600 hover:from-amber-500 hover:via-amber-400 hover:to-orange-500 text-white shadow-lg shadow-amber-500/30 hover:shadow-amber-500/40"
+                        >
+                          <div className="flex items-center gap-2">
+                            {isWithdrawing ? (
+                              <>
+                                <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/30 border-t-white"></div>
+                                <span>提取中...</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-xl">💰</span>
+                                <span>提取押金</span>
+                              </>
+                            )}
+                          </div>
+                          <div className="absolute inset-0 bg-gradient-to-r from-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 rounded-2xl"></div>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+              {/* 参与但无押金可提取的用户安慰横幅 */}
+              {address && phase === 2 && highestBidder && highestBidder !== '0x0000000000000000000000000000000000000000' &&
+                address.toLowerCase() !== highestBidder.toLowerCase() &&
+                address.toLowerCase() !== beneficiary?.toLowerCase() &&
+                !hasPendingReturn && (
+                  // 检查用户是否参与过这个拍卖（通过localStorage或其他方式）
+                  (() => {
+                    try {
+                      const normalizedAddress = address.toLowerCase();
+                      const storedBids = localStorage.getItem(`bids_${normalizedAddress}`);
+                      const hasParticipated = storedBids && JSON.parse(storedBids).some((bid: any) =>
+                        bid.auctionAddress?.toLowerCase() === auctionAddress?.toLowerCase()
+                      );
+
+                      return hasParticipated;
+                    } catch {
+                      return false;
+                    }
+                  })() && (
+                    <div className="bg-gradient-to-r from-slate-900/80 via-slate-800/70 to-gray-900/80 backdrop-blur-md rounded-2xl border border-slate-500/50 shadow-2xl relative overflow-hidden mb-6">
+                      {/* 背景装饰 */}
+                      <div className="absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.05)_1px,transparent_1px)] bg-[size:20px_20px]"></div>
+
+                      <div className="p-6 relative z-10 flex items-center gap-4">
+                        <div className="w-16 h-16 bg-gradient-to-br from-slate-500/30 to-gray-500/30 rounded-full flex items-center justify-center">
+                          <span className="text-3xl">🎯</span>
+                        </div>
+                        <div className="flex-1">
+                          <h3 className="text-2xl font-bold text-white mb-1">🌟 感谢您的参与！</h3>
+                          <p className="text-slate-200">虽然这次没有获胜，但您勇敢参与盲拍的精神值得称赞！</p>
+                          <p className="text-slate-300 text-sm mt-1">💫 继续探索更多精彩的拍卖，每一次尝试都让您更接近成功！</p>
+                        </div>
+                        <div className="flex gap-3">
+                          <a
+                            href="/all-auctions"
+                            className="group relative px-6 py-3 rounded-2xl font-semibold transition-all duration-300 transform hover:scale-105 bg-gradient-to-r from-slate-600 via-slate-500 to-gray-600 hover:from-slate-500 hover:via-slate-400 hover:to-gray-500 text-white shadow-lg shadow-slate-500/30 hover:shadow-slate-500/40"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-xl">🔍</span>
+                              <span>浏览更多拍卖</span>
+                            </div>
+                            <div className="absolute inset-0 bg-gradient-to-r from-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 rounded-2xl"></div>
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                )}
+
               {/* 主要内容区域 */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* 最高出价信息卡片 */}
@@ -825,12 +1183,14 @@ function ResultsContent() {
                     {highestBidder && highestBidder !== '0x0000000000000000000000000000000000000000' ? (
                       <div className="flex items-center justify-center mt-4">
                         <span className="text-slate-300 text-sm mr-2">获胜者:</span>
-                        <span className="text-white text-sm">{formatAddress(highestBidder)}</span>
+                        <span className="text-white text-sm font-medium tracking-wide">
+                          {formatAddress(highestBidder)}
+                        </span>
                         <a
                           href={`/blockexplorer/address/${highestBidder}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="ml-2 text-blue-400 hover:text-blue-300"
+                          className="ml-2 text-blue-400 hover:text-blue-300 transition-colors"
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -942,6 +1302,17 @@ function ResultsContent() {
                   <p className="text-white font-semibold">{pendingAmount} ETH</p>
                 </div>
               )}
+
+              {/* 交易历史按钮 */}
+              <button
+                onClick={handleViewTransactionHistory}
+                className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-medium py-3 px-4 rounded-lg transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-indigo-500/25 flex items-center justify-center gap-2"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span>查看交易历史</span>
+              </button>
             </div>
           </div>
 
@@ -969,6 +1340,233 @@ function ResultsContent() {
           </div>
         </div>
       </div>
+
+      {/* 交易历史弹窗 */}
+      {showTransactionHistory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+          <div className="bg-slate-900/95 backdrop-blur-md rounded-3xl border border-slate-700/50 shadow-2xl max-w-6xl w-full mx-4 max-h-[90vh] overflow-hidden flex flex-col">
+            {/* 弹窗头部 */}
+            <div className="p-6 border-b border-slate-700/50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-gradient-to-br from-indigo-500/20 to-purple-500/20 rounded-xl flex items-center justify-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-2xl font-bold text-white">交易历史</h3>
+                  <p className="text-slate-400 text-sm">本次拍卖的所有出价记录</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowTransactionHistory(false)}
+                className="w-10 h-10 bg-slate-800/50 hover:bg-slate-700/50 rounded-xl flex items-center justify-center transition-colors"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* 弹窗内容 */}
+            <div className="flex-1 overflow-hidden">
+              {loadingHistory ? (
+                <div className="flex items-center justify-center h-96">
+                  <div className="text-center">
+                    <div className="flex justify-center mb-4">
+                      <div className="w-16 h-16 relative">
+                        <div className="w-16 h-16 rounded-full border-2 border-indigo-500/20 border-t-indigo-500 animate-spin"></div>
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <div className="w-10 h-10 rounded-full border-2 border-purple-500/20 border-t-purple-500 animate-spin"></div>
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-slate-300 text-lg">加载交易历史中...</p>
+                    <p className="text-slate-500 text-sm mt-2">正在从区块链获取数据</p>
+                  </div>
+                </div>
+              ) : transactionHistory.length === 0 ? (
+                <div className="flex items-center justify-center h-96">
+                  <div className="text-center">
+                    <div className="w-16 h-16 bg-slate-800/50 rounded-full flex items-center justify-center mb-4">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                    </div>
+                    <p className="text-slate-300 text-lg">暂无交易记录</p>
+                    <p className="text-slate-500 text-sm mt-2">此拍卖还没有任何出价记录</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-6 overflow-y-auto h-full">
+                  {/* 统计摘要 */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div className="bg-blue-900/20 rounded-xl p-4 border border-blue-800/30">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="text-blue-300 text-sm">参与用户</p>
+                          <p className="text-white text-2xl font-bold">{transactionHistory.length}</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-purple-900/20 rounded-xl p-4 border border-purple-800/30">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-purple-500/20 rounded-lg flex items-center justify-center">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="text-purple-300 text-sm">有效出价</p>
+                          <p className="text-white text-2xl font-bold">
+                            {transactionHistory.filter(bidder => bidder.hasValidBid).length}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-green-900/20 rounded-xl p-4 border border-green-800/30">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-green-500/20 rounded-lg flex items-center justify-center">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="text-green-300 text-sm">已揭示用户</p>
+                          <p className="text-white text-2xl font-bold">
+                            {transactionHistory.filter(bidder => bidder.hasRevealed).length}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 交易详情表格 */}
+                  <div className="bg-slate-800/30 rounded-xl overflow-hidden border border-slate-700/50">
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-slate-800/50">
+                          <tr>
+                            <th className="px-6 py-4 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
+                              竞拍者
+                            </th>
+                            <th className="px-6 py-4 text-center text-xs font-medium text-slate-300 uppercase tracking-wider">
+                              有效出价
+                            </th>
+                            <th className="px-6 py-4 text-center text-xs font-medium text-slate-300 uppercase tracking-wider">
+                              揭示状态
+                            </th>
+                            <th className="px-6 py-4 text-center text-xs font-medium text-slate-300 uppercase tracking-wider">
+                              出价
+                            </th>
+                            <th className="px-6 py-4 text-right text-xs font-medium text-slate-300 uppercase tracking-wider">
+                              押金
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-700/50">
+                          {transactionHistory.map((bidder, index) => (
+                            <tr key={bidder.address} className={`hover:bg-slate-800/20 transition-colors ${bidder.isHighestBidder ? "bg-gradient-to-r from-yellow-900/20 to-amber-900/20" : ""
+                              }`}>
+                              {/* 竞拍者 */}
+                              <td className="px-6 py-4">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-8 h-8 bg-gradient-to-br from-blue-500/20 to-purple-500/20 rounded-full flex items-center justify-center">
+                                    <span className="text-xs font-bold text-white">{index + 1}</span>
+                                  </div>
+                                  <div>
+                                    <p className="text-white font-medium text-sm">
+                                      {formatAddress(bidder.address)}
+                                    </p>
+                                    {bidder.isHighestBidder && (
+                                      <div className="flex items-center mt-1">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 text-yellow-400 mr-1" fill="currentColor" viewBox="0 0 24 24">
+                                          <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                                        </svg>
+                                        <span className="text-yellow-400 text-xs font-semibold">最高出价者</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                              {/* 有效出价 */}
+                              <td className="px-6 py-4 text-center">
+                                {bidder.hasValidBid ? (
+                                  <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-900/30 text-green-300 border border-green-800/30">
+                                    ✅ 有效
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-900/30 text-red-300 border border-red-800/30">
+                                    ❌ 无效
+                                  </span>
+                                )}
+                              </td>
+                              {/* 揭示状态 */}
+                              <td className="px-6 py-4 text-center">
+                                {bidder.hasRevealed ? (
+                                  <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-900/30 text-green-300 border border-green-800/30">
+                                    ✅ 已揭示
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-900/30 text-yellow-300 border border-yellow-800/30">
+                                    ⏳ 未揭示
+                                  </span>
+                                )}
+                              </td>
+                              {/* 出价 */}
+                              <td className="px-6 py-4 text-center">
+                                <span className={`font-semibold ${bidder.isHighestBidder
+                                  ? "text-yellow-400"
+                                  : bidder.hasRevealed
+                                    ? "text-green-400"
+                                    : "text-slate-400"
+                                  }`}>
+                                  {bidder.bidAmount}
+                                </span>
+                              </td>
+                              {/* 押金 */}
+                              <td className="px-6 py-4 text-right">
+                                <span className="text-blue-400 font-semibold">
+                                  {formatEth(bidder.totalDeposit)} ETH
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* 底部说明 */}
+                  <div className="mt-6 bg-slate-800/20 rounded-xl p-4 border border-slate-700/30">
+                    <h4 className="text-white font-semibold mb-2 flex items-center gap-2">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      说明
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-slate-300">
+                      <div>
+                        <p><strong className="text-white">有效出价:</strong> 用户是否提交了有效的竞拍出价</p>
+                        <p><strong className="text-white">揭示状态:</strong> 用户是否在揭示阶段公开了出价信息</p>
+                      </div>
+                      <div>
+                        <p><strong className="text-white">出价:</strong> 只有最高出价者显示具体金额，其他用户出于隐私保护不显示</p>
+                        <p><strong className="text-white">押金:</strong> 用户在竞拍阶段提交的押金总和</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

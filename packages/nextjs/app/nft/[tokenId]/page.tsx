@@ -260,10 +260,14 @@ export default function NFTDetailPage() {
             <div className="mb-8">
               <Link
                 href="/nft-market"
-                className="inline-flex items-center text-slate-400 hover:text-white transition-colors"
+                className="inline-flex items-center px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 
+                  hover:from-purple-500 hover:to-blue-500 text-white font-semibold rounded-xl 
+                  shadow-lg shadow-purple-500/25 hover:shadow-purple-500/40 
+                  transition-all duration-300 transform hover:scale-105 hover:-translate-y-1
+                  border border-purple-500/20 hover:border-purple-400/40 backdrop-blur-sm"
               >
-                <ArrowLeftIcon className="h-5 w-5 mr-2" />
-                返回NFT市场
+                <ArrowLeftIcon className="h-5 w-5 mr-3" />
+                <span>返回NFT市场</span>
               </Link>
             </div>
 

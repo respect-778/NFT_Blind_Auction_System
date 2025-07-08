@@ -78,6 +78,36 @@ const MyBids = () => {
   const [bidRecords, setBidRecords] = useState<BidRecord[]>([]);
   const [auctionInfos, setAuctionInfos] = useState<{ [key: string]: AuctionInfo }>({});
   const [loading, setLoading] = useState(true);
+  // 修改搜索相关状态
+  const [searchInput, setSearchInput] = useState(""); // 搜索框输入内容
+  const [searchTerm, setSearchTerm] = useState(""); // 实际用于搜索的内容
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 3;
+
+  // 重置搜索和分页
+  const resetSearch = () => {
+    setSearchInput("");
+    setSearchTerm("");
+    setCurrentPage(1);
+  };
+
+  // 执行搜索
+  const handleSearch = () => {
+    setSearchTerm(searchInput);
+    setCurrentPage(1); // 搜索时重置到第一页
+  };
+
+  // 处理回车键搜索
+  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      handleSearch();
+    }
+  };
+
+  // 在搜索时重置页码
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
 
   // 获取合约信息
   const { data: factoryContractData } = useDeployedContractInfo("BlindAuctionFactory");
@@ -415,177 +445,307 @@ const MyBids = () => {
               </div>
             ) : (
               <div className="space-y-6">
-                {bidRecords.map((bid, index) => {
-                  const auctionInfo = auctionInfos[bid.auctionAddress];
-                  return (
-                    <div
-                      key={index}
-                      className="bg-slate-900/70 backdrop-blur-md rounded-xl border border-slate-700/60 shadow-lg overflow-hidden"
+                {/* 搜索框 */}
+                <div className="relative flex items-center">
+                  <input
+                    type="text"
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
+                    onKeyPress={handleKeyPress}
+                    placeholder="搜索拍卖名称、描述..."
+                    className="w-full px-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                  />
+                  {searchInput && (
+                    <button
+                      onClick={resetSearch}
+                      className="absolute right-12 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-white"
                     >
-                      <div className="p-6">
-                        <div className="flex flex-col lg:flex-row gap-6">
-                          {/* 左侧：拍卖信息 */}
-                          <div className="lg:w-1/2">
-                            <div className="flex items-center justify-between mb-4">
-                              <h3 className="text-xl font-semibold text-white">
-                                {auctionInfo?.metadata.name || "加载中..."}
-                              </h3>
-                              {auctionInfo && (
-                                <div className={`px-3 py-1 rounded-md text-sm font-semibold ${getStateClass(auctionInfo.state)}`}>
-                                  {getStateText(auctionInfo.state)}
-                                </div>
-                              )}
-                            </div>
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
+                  <button
+                    onClick={handleSearch}
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-white transition-colors duration-200"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  </button>
+                </div>
 
-                            <div className="space-y-3">
-                              <div>
-                                <p className="text-sm text-slate-400">拍卖地址</p>
-                                <div className="flex items-center justify-between bg-slate-800/50 p-2 rounded">
-                                  <div className="text-cyan-300 font-mono text-sm">
-                                    <Address address={bid.auctionAddress as `0x${string}`} format="short" />
-                                  </div>
-                                  <button
-                                    onClick={() => copyToClipboard(bid.auctionAddress, "拍卖地址")}
-                                    className="text-blue-400 hover:text-blue-300 text-sm"
-                                  >
-                                    复制
-                                  </button>
-                                </div>
-                              </div>
+                {/* 过滤和显示竞拍记录 */}
+                {(() => {
+                  // 搜索过滤
+                  const filteredRecords = bidRecords.filter(bid => {
+                    const auctionInfo = auctionInfos[bid.auctionAddress];
+                    if (!auctionInfo) return false;
 
-                              <div>
-                                <p className="text-sm text-slate-400">拍卖描述</p>
-                                <p className="text-white">
-                                  {auctionInfo?.metadata.description || "加载中..."}
-                                </p>
-                              </div>
+                    if (!searchTerm) return true; // 如果没有搜索词，显示所有记录
 
-                              <div>
-                                <p className="text-sm text-slate-400">最低出价</p>
-                                <p className="text-green-400 font-medium">
-                                  {auctionInfo
-                                    ? (() => {
-                                      try {
-                                        // 处理不同格式的价格数据
-                                        const minPrice = auctionInfo.metadata.minPrice;
-                                        if (!minPrice || minPrice === "0") {
-                                          return "0 ETH";
-                                        }
+                    const searchString = searchTerm.toLowerCase();
+                    return (
+                      auctionInfo.metadata.name.toLowerCase().includes(searchString) ||
+                      auctionInfo.metadata.description.toLowerCase().includes(searchString)
+                    );
+                  });
 
-                                        // 如果已经是ETH格式的字符串
-                                        if (typeof minPrice === 'string' && minPrice.includes('.')) {
-                                          return `${minPrice} ETH`;
-                                        }
+                  // 分页
+                  const totalPages = Math.ceil(filteredRecords.length / itemsPerPage);
+                  const startIndex = (currentPage - 1) * itemsPerPage;
+                  const paginatedRecords = filteredRecords.slice(startIndex, startIndex + itemsPerPage);
 
-                                        // 如果是wei格式的大整数字符串
-                                        return `${formatEther(BigInt(minPrice))} ETH`;
-                                      } catch (error) {
-                                        console.error("格式化最低出价失败:", error, auctionInfo.metadata.minPrice);
-                                        return "格式错误";
-                                      }
-                                    })()
-                                    : "加载中..."
-                                  }
-                                </p>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* 右侧：出价信息 */}
-                          <div className="lg:w-1/2">
-                            <h4 className="text-lg font-semibold text-white mb-4">您的出价信息</h4>
-
-                            <div className="space-y-3">
-                              <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                  <p className="text-sm text-slate-400">出价金额</p>
-                                  <p className="text-white font-medium">{bid.value} ETH</p>
-                                </div>
-                                <div>
-                                  <p className="text-sm text-slate-400">押金</p>
-                                  <p className="text-white font-medium">{bid.deposit} ETH</p>
-                                </div>
-                              </div>
-
-                              <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                  <p className="text-sm text-slate-400">出价类型</p>
-                                  <p className={`font-medium ${bid.fake ? 'text-orange-400' : 'text-green-400'}`}>
-                                    {bid.fake ? '假出价' : '真实出价'}
-                                  </p>
-                                </div>
-                                <div>
-                                  <p className="text-sm text-slate-400">出价时间</p>
-                                  <p className="text-white text-sm">
-                                    {formatTimestamp(bid.timestamp)}
-                                  </p>
-                                </div>
-                              </div>
-
-                              <div>
-                                <p className="text-sm text-slate-400">密钥</p>
-                                <div className="flex items-center justify-between bg-slate-800/50 p-2 rounded">
-                                  <span className="text-cyan-300 font-mono text-sm truncate max-w-[70%]">
-                                    {bid.secret}
-                                  </span>
-                                  <button
-                                    onClick={() => copyToClipboard(bid.secret, "密钥")}
-                                    className="text-blue-400 hover:text-blue-300 text-sm"
-                                  >
-                                    复制
-                                  </button>
-                                </div>
-                              </div>
-
-                              <div>
-                                <p className="text-sm text-slate-400">加密出价</p>
-                                <div className="flex items-center justify-between bg-slate-800/50 p-2 rounded">
-                                  <span className="text-cyan-300 font-mono text-sm truncate max-w-[70%]">
-                                    {bid.blindedBid}
-                                  </span>
-                                  <button
-                                    onClick={() => copyToClipboard(bid.blindedBid, "加密出价")}
-                                    className="text-blue-400 hover:text-blue-300 text-sm"
-                                  >
-                                    复制
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* 操作按钮 */}
-                        <div className="mt-6 pt-4 border-t border-slate-700/50 flex flex-wrap gap-3">
-                          <Link
-                            href={`/auction/${bid.auctionAddress}`}
-                            className="btn btn-sm bg-blue-600 hover:bg-blue-700 text-white border-0"
+                  return (
+                    <>
+                      {/* 竞拍记录列表 */}
+                      {paginatedRecords.map((bid, index) => {
+                        const auctionInfo = auctionInfos[bid.auctionAddress];
+                        return (
+                          <div
+                            key={index}
+                            className="bg-slate-900/70 backdrop-blur-md rounded-xl border border-slate-700/60 shadow-lg overflow-hidden"
                           >
-                            查看拍卖详情
-                          </Link>
+                            <div className="p-6">
+                              <div className="flex flex-col lg:flex-row gap-6">
+                                {/* 左侧：拍卖信息 */}
+                                <div className="lg:w-1/2">
+                                  <div className="flex items-center justify-between mb-4">
+                                    <h3 className="text-xl font-semibold text-white">
+                                      {auctionInfo?.metadata.name || "加载中..."}
+                                    </h3>
+                                    {auctionInfo && (
+                                      <div className={`px-3 py-1 rounded-md text-sm font-semibold ${getStateClass(auctionInfo.state)}`}>
+                                        {getStateText(auctionInfo.state)}
+                                      </div>
+                                    )}
+                                  </div>
 
-                          {auctionInfo?.state === "revealing" && (
-                            <Link
-                              href={`/reveal?address=${bid.auctionAddress}`}
-                              className="btn btn-sm bg-amber-600 hover:bg-amber-700 text-white border-0"
-                            >
-                              揭示出价
-                            </Link>
-                          )}
+                                  <div className="space-y-3">
+                                    <div>
+                                      <p className="text-sm text-slate-400">拍卖地址</p>
+                                      <div className="flex items-center justify-between bg-slate-800/50 p-2 rounded">
+                                        <div className="text-cyan-300 font-mono text-sm">
+                                          <Address address={bid.auctionAddress as `0x${string}`} format="short" />
+                                        </div>
+                                        <button
+                                          onClick={() => copyToClipboard(bid.auctionAddress, "拍卖地址")}
+                                          className="text-blue-400 hover:text-blue-300 text-sm"
+                                        >
+                                          复制
+                                        </button>
+                                      </div>
+                                    </div>
 
-                          {auctionInfo?.state === "ended" && (
-                            <Link
-                              href={`/results?address=${bid.auctionAddress}`}
-                              className="btn btn-sm bg-green-600 hover:bg-green-700 text-white border-0"
-                            >
-                              查看结果
-                            </Link>
-                          )}
+                                    <div>
+                                      <p className="text-sm text-slate-400">拍卖描述</p>
+                                      <p className="text-white">
+                                        {auctionInfo?.metadata.description || "加载中..."}
+                                      </p>
+                                    </div>
+
+                                    <div>
+                                      <p className="text-sm text-slate-400">最低出价</p>
+                                      <p className="text-green-400 font-medium">
+                                        {auctionInfo
+                                          ? (() => {
+                                            try {
+                                              // 处理不同格式的价格数据
+                                              const minPrice = auctionInfo.metadata.minPrice;
+                                              if (!minPrice || minPrice === "0") {
+                                                return "0 ETH";
+                                              }
+
+                                              // 如果已经是ETH格式的字符串
+                                              if (typeof minPrice === 'string' && minPrice.includes('.')) {
+                                                return `${minPrice} ETH`;
+                                              }
+
+                                              // 如果是wei格式的大整数字符串
+                                              return `${formatEther(BigInt(minPrice))} ETH`;
+                                            } catch (error) {
+                                              console.error("格式化最低出价失败:", error, auctionInfo.metadata.minPrice);
+                                              return "格式错误";
+                                            }
+                                          })()
+                                          : "加载中..."
+                                        }
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* 右侧：出价信息 */}
+                                <div className="lg:w-1/2">
+                                  <h4 className="text-lg font-semibold text-white mb-4">您的出价信息</h4>
+
+                                  <div className="space-y-3">
+                                    <div className="grid grid-cols-2 gap-4">
+                                      <div>
+                                        <p className="text-sm text-slate-400">出价金额</p>
+                                        <p className="text-white font-medium">{bid.value} ETH</p>
+                                      </div>
+                                      <div>
+                                        <p className="text-sm text-slate-400">押金</p>
+                                        <p className="text-white font-medium">{bid.deposit} ETH</p>
+                                      </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-4">
+                                      <div>
+                                        <p className="text-sm text-slate-400">出价类型</p>
+                                        <p className={`font-medium ${bid.fake ? 'text-orange-400' : 'text-green-400'}`}>
+                                          {bid.fake ? '假出价' : '真实出价'}
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <p className="text-sm text-slate-400">出价时间</p>
+                                        <p className="text-white text-sm">
+                                          {formatTimestamp(bid.timestamp)}
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    <div>
+                                      <p className="text-sm text-slate-400">密钥</p>
+                                      <div className="flex items-center justify-between bg-slate-800/50 p-2 rounded">
+                                        <span className="text-cyan-300 font-mono text-sm truncate max-w-[70%]">
+                                          {bid.secret}
+                                        </span>
+                                        <button
+                                          onClick={() => copyToClipboard(bid.secret, "密钥")}
+                                          className="text-blue-400 hover:text-blue-300 text-sm"
+                                        >
+                                          复制
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    <div>
+                                      <p className="text-sm text-slate-400">加密出价</p>
+                                      <div className="flex items-center justify-between bg-slate-800/50 p-2 rounded">
+                                        <span className="text-cyan-300 font-mono text-sm truncate max-w-[70%]">
+                                          {bid.blindedBid}
+                                        </span>
+                                        <button
+                                          onClick={() => copyToClipboard(bid.blindedBid, "加密出价")}
+                                          className="text-blue-400 hover:text-blue-300 text-sm"
+                                        >
+                                          复制
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* 操作按钮 */}
+                              <div className="mt-6 pt-4 border-t border-slate-700/50 flex flex-wrap gap-3">
+                                <Link
+                                  href={`/auction/${bid.auctionAddress}`}
+                                  className="btn btn-sm bg-blue-600 hover:bg-blue-700 text-white border-0"
+                                >
+                                  查看拍卖详情
+                                </Link>
+
+                                {auctionInfo?.state === "revealing" && (
+                                  <Link
+                                    href={`/reveal?address=${bid.auctionAddress}`}
+                                    className="btn btn-sm bg-amber-600 hover:bg-amber-700 text-white border-0"
+                                  >
+                                    揭示出价
+                                  </Link>
+                                )}
+
+                                {auctionInfo?.state === "ended" && (
+                                  <Link
+                                    href={`/results?address=${bid.auctionAddress}`}
+                                    className="btn btn-sm bg-green-600 hover:bg-green-700 text-white border-0"
+                                  >
+                                    查看结果
+                                  </Link>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {/* 分页控制器 */}
+                      {totalPages > 1 && (
+                        <div className="flex justify-center items-center space-x-4 mt-8">
+                          {/* 跳转到第一页按钮 */}
+                          <button
+                            onClick={() => setCurrentPage(1)}
+                            disabled={currentPage === 1}
+                            className={`px-4 py-2 rounded-lg ${currentPage === 1
+                              ? 'bg-slate-800/30 text-slate-500 cursor-not-allowed'
+                              : 'bg-blue-600/30 text-blue-400 hover:bg-blue-600/50'
+                              }`}
+                            title="跳转到第一页"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                              <path fillRule="evenodd" d="M15.707 15.707a1 1 0 01-1.414 0L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414l5-5a1 1 0 011.414 0l5 5a1 1 0 010 1.414z" clipRule="evenodd" />
+                              <path fillRule="evenodd" d="M15.707 9.707a1 1 0 01-1.414 0L10 5.414 5.707 9.707a1 1 0 01-1.414-1.414l5-5a1 1 0 011.414 0l5 5a1 1 0 010 1.414z" clipRule="evenodd" />
+                            </svg>
+                          </button>
+
+                          {/* 上一页按钮 */}
+                          <button
+                            onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                            disabled={currentPage === 1}
+                            className={`px-4 py-2 rounded-lg ${currentPage === 1
+                              ? 'bg-slate-800/30 text-slate-500 cursor-not-allowed'
+                              : 'bg-blue-600/30 text-blue-400 hover:bg-blue-600/50'
+                              }`}
+                          >
+                            上一页
+                          </button>
+
+                          {/* 页码显示 */}
+                          <span className="text-slate-400 bg-slate-800/30 px-4 py-2 rounded-lg">
+                            第 {currentPage} 页，共 {totalPages} 页
+                          </span>
+
+                          {/* 下一页按钮 */}
+                          <button
+                            onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                            disabled={currentPage === totalPages}
+                            className={`px-4 py-2 rounded-lg ${currentPage === totalPages
+                              ? 'bg-slate-800/30 text-slate-500 cursor-not-allowed'
+                              : 'bg-blue-600/30 text-blue-400 hover:bg-blue-600/50'
+                              }`}
+                          >
+                            下一页
+                          </button>
+
+                          {/* 跳转到最后一页按钮 */}
+                          <button
+                            onClick={() => setCurrentPage(totalPages)}
+                            disabled={currentPage === totalPages}
+                            className={`px-4 py-2 rounded-lg ${currentPage === totalPages
+                              ? 'bg-slate-800/30 text-slate-500 cursor-not-allowed'
+                              : 'bg-blue-600/30 text-blue-400 hover:bg-blue-600/50'
+                              }`}
+                            title="跳转到最后一页"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414l-5 5a1 1 0 01-1.414 0l-5-5a1 1 0 010-1.414z" clipRule="evenodd" />
+                              <path fillRule="evenodd" d="M4.293 10.293a1 1 0 011.414 0L10 14.586l4.293-4.293a1 1 0 111.414 1.414l-5 5a1 1 0 01-1.414 0l-5-5a1 1 0 010-1.414z" clipRule="evenodd" />
+                            </svg>
+                          </button>
                         </div>
-                      </div>
-                    </div>
+                      )}
+
+                      {/* 无搜索结果提示 */}
+                      {filteredRecords.length === 0 && (
+                        <div className="text-center py-8">
+                          <p className="text-slate-400">没有找到匹配的竞拍记录</p>
+                        </div>
+                      )}
+                    </>
                   );
-                })}
+                })()}
               </div>
             )}
 

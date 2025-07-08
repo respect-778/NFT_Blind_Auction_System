@@ -423,6 +423,118 @@ const NFTDownloadPage = () => {
         onClose={() => setIsModalOpen(false)}
         onSelectCid={(selectedCid) => setCid(selectedCid)}
       />
+
+      {/* 热门NFT博主推荐区域 */}
+      <div className="relative w-full max-w-5xl mx-auto mt-20 px-4">
+        <div className="text-center mb-10">
+          <h2 className="text-3xl font-bold mb-3 bg-clip-text text-transparent bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400">
+            热门NFT博主推荐
+          </h2>
+          <p className="text-slate-400">
+            关注这些优秀的NFT创作者和意见领袖
+          </p>
+        </div>
+
+        {/* 博主卡片网格 */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-8">
+          {[
+            {
+              name: "Coinbase_NFT",
+              handle: "@Coinbase_NFT",
+              avatar: "/images/nft-bloggers/4ed8844947a7b6305c5f7232d39c589.png",
+              followers: "2.4M",
+              verified: true
+            },
+            {
+              name: "NftPinuts",
+              handle: "@NftPinuts",
+              avatar: "/images/nft-bloggers/b44465b94cf86ae3f38ca0dc3679dc6.png",
+              followers: "892K",
+              verified: true
+            },
+            {
+              name: "audazityNFT",
+              handle: "@audazityNFT",
+              avatar: "/images/nft-bloggers/04fa1bc3214f851cc396f16b4abb10a.png",
+              followers: "455K",
+              verified: true
+            },
+            {
+              name: "NftDaki",
+              handle: "@NftDaki",
+              avatar: "/images/nft-bloggers/a1ff5a86be49da3e8917647512cef78.png",
+              followers: "331K",
+              verified: true
+            },
+            {
+              name: "OpenSea",
+              handle: "@OpenSea",
+              avatar: "/images/nft-bloggers/3684c47e636e23a66417db70bd79c52.png",
+              followers: "1.2M",
+              verified: true
+            }
+          ].map((blogger, index) => (
+            <div key={index} className="group">
+              {/* 简化的主卡片 */}
+              <div className="bg-gradient-to-br from-purple-900/30 to-pink-900/30 backdrop-blur-sm 
+                rounded-2xl p-6 border border-purple-500/20 hover:border-purple-500/40 
+                transition-all duration-300 hover:transform hover:scale-105 
+                hover:shadow-xl hover:shadow-purple-500/25">
+
+                {/* 头像和认证 */}
+                <div className="relative mx-auto w-20 h-20 mb-4">
+                  <div className="w-full h-full rounded-full overflow-hidden border-3 border-white/20 
+                    group-hover:border-white/40 transition-colors duration-300 bg-white/5 backdrop-blur-sm">
+                    <img
+                      src={blogger.avatar}
+                      alt={blogger.name}
+                      className="w-full h-full object-cover object-center"
+                      style={{
+                        filter: 'saturate(1.1) contrast(1.05) brightness(1.05)'
+                      }}
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(blogger.name)}&background=7c3aed&color=fff&size=80`;
+                      }}
+                    />
+                  </div>
+                  {blogger.verified && (
+                    <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-blue-500 
+                      rounded-full flex items-center justify-center border-3 border-white shadow-lg">
+                      <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+
+                {/* 名称 */}
+                <h3 className="text-white font-bold text-base text-center mb-2 truncate">
+                  {blogger.name}
+                </h3>
+
+                {/* 粉丝数 */}
+                <div className="flex items-center justify-center space-x-2 mb-4">
+                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                  <span className="text-slate-300 text-sm font-medium">{blogger.followers}</span>
+                </div>
+
+                {/* 关注按钮 */}
+                <a
+                  href={`https://twitter.com/${blogger.handle.replace('@', '')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block w-full text-center px-4 py-3 bg-gradient-to-r from-blue-500 to-purple-500 
+                    hover:from-blue-400 hover:to-purple-400 text-white text-sm font-medium 
+                    rounded-xl transition-all duration-300 hover:shadow-lg 
+                    hover:shadow-blue-500/25 transform hover:scale-105"
+                >
+                  关注
+                </a>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 };

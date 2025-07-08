@@ -73,48 +73,79 @@ const MyAssets = () => {
         console.log("当前用户地址:", address);
         console.log("工厂合约地址:", factoryContractData.address);
 
-        // 首先尝试通过事件日志获取用户创建的拍卖（更可靠的方法）
+        // 首先尝试直接从合约获取用户创建的拍卖（更可靠且快速）
         let userAuctions: `0x${string}`[] = [];
 
         try {
-          console.log("通过事件日志获取用户创建的拍卖...");
-          const createdLogs = await publicClient.getContractEvents({
+          console.log("使用getUserAuctions方法获取用户拍卖...");
+          const contractUserAuctions = await publicClient.readContract({
             address: factoryContractData.address,
             abi: factoryContractData.abi,
-            eventName: 'AuctionCreated',
-            args: {
-              beneficiary: address
-            },
-            fromBlock: BigInt(0),
-          });
+            functionName: 'getUserAuctions',
+            args: [address],
+          }) as `0x${string}`[];
 
-          console.log("通过事件日志找到的拍卖创建记录:", createdLogs);
+          console.log("工厂合约getUserAuctions返回:", contractUserAuctions);
+          userAuctions = contractUserAuctions;
+        } catch (contractError) {
+          console.error("getUserAuctions调用失败:", contractError);
+          console.log("将尝试使用事件日志作为备选方案");
 
-          if (createdLogs.length > 0) {
-            // 从事件日志中提取拍卖地址
-            const auctionAddressesFromLogs = createdLogs.map(log => log.args?.auctionAddress).filter(Boolean) as `0x${string}`[];
-            console.log("从事件日志提取的拍卖地址:", auctionAddressesFromLogs);
-            userAuctions = auctionAddressesFromLogs;
-          }
-        } catch (logError) {
-          console.error("通过事件日志查找拍卖失败:", logError);
-        }
-
-        // 如果事件日志方法失败或没有结果，尝试getUserAuctions方法
-        if (userAuctions.length === 0) {
+          // 如果直接合约调用失败，才使用事件日志作为备选方案
           try {
-            console.log("事件日志方法无结果，尝试getUserAuctions方法...");
-            const contractUserAuctions = await publicClient.readContract({
-              address: factoryContractData.address,
-              abi: factoryContractData.abi,
-              functionName: 'getUserAuctions',
-              args: [address],
-            }) as `0x${string}`[];
+            console.log("通过事件日志获取用户创建的拍卖...");
 
-            console.log("工厂合约getUserAuctions返回:", contractUserAuctions);
-            userAuctions = contractUserAuctions;
-          } catch (contractError) {
-            console.error("getUserAuctions调用失败:", contractError);
+            // 获取当前区块高度
+            const currentBlock = await publicClient.getBlockNumber();
+            console.log("当前区块高度:", currentBlock);
+
+            // 设置合理的起始区块（避免查询过多历史数据）
+            // 可以根据合约部署时间调整，这里设置为最近10000个区块
+            const searchFromBlock = currentBlock > 10000n ? currentBlock - 10000n : 0n;
+            console.log("从区块开始查询:", searchFromBlock);
+
+            // 分批查询事件日志（每次查询500个区块）
+            const batchSize = 500n;
+            let allCreatedLogs: any[] = [];
+
+            for (let startBlock = searchFromBlock; startBlock <= currentBlock; startBlock += batchSize) {
+              const endBlock = startBlock + batchSize - 1n > currentBlock ? currentBlock : startBlock + batchSize - 1n;
+
+              try {
+                console.log(`查询区块范围: ${startBlock} - ${endBlock}`);
+
+                const createdLogs = await publicClient.getContractEvents({
+                  address: factoryContractData.address,
+                  abi: factoryContractData.abi,
+                  eventName: 'AuctionCreated',
+                  args: {
+                    beneficiary: address
+                  },
+                  fromBlock: startBlock,
+                  toBlock: endBlock,
+                });
+
+                if (createdLogs.length > 0) {
+                  console.log(`在区块 ${startBlock}-${endBlock} 找到 ${createdLogs.length} 个拍卖创建记录`);
+                  allCreatedLogs.push(...createdLogs);
+                }
+              } catch (batchError) {
+                console.warn(`查询区块范围 ${startBlock}-${endBlock} 失败:`, batchError);
+                // 继续查询下一个批次，不中断整个流程
+              }
+            }
+
+            console.log("通过事件日志找到的拍卖创建记录总数:", allCreatedLogs.length);
+
+            if (allCreatedLogs.length > 0) {
+              // 从事件日志中提取拍卖地址
+              const auctionAddressesFromLogs = allCreatedLogs.map(log => log.args?.auctionAddress).filter(Boolean) as `0x${string}`[];
+              console.log("从事件日志提取的拍卖地址:", auctionAddressesFromLogs);
+              userAuctions = auctionAddressesFromLogs;
+            }
+          } catch (logError) {
+            console.error("通过事件日志查找拍卖失败:", logError);
+            console.log("所有获取用户拍卖的方法都失败，可能是网络问题或合约问题");
           }
         }
 
@@ -241,34 +272,49 @@ const MyAssets = () => {
                 // 如果从NFT合约获取失败或不是NFT拍卖，尝试从事件日志获取
                 if (!metadata.image) {
                   console.log("尝试从事件日志获取创建拍卖的元数据...");
-                  // 通过过滤区块日志方式获取创建事件
-                  const logs = await publicClient.getContractEvents({
-                    address: factoryContractData.address,
-                    abi: factoryContractData.abi,
-                    eventName: 'AuctionCreated',
-                    args: {
-                      auctionAddress: auctionAddress
-                    },
-                    fromBlock: BigInt(0),
-                  });
 
-                  if (logs && logs.length > 0 && logs[0].args) {
-                    const metadataStr = logs[0].args.metadata as string;
-                    if (metadataStr) {
-                      try {
-                        const parsedMetadata = JSON.parse(metadataStr);
-                        metadata = {
-                          ...parsedMetadata,
-                          // 确保图片URL正确格式化
-                          image: parsedMetadata.imageHash
-                            ? `https://ipfs.io/ipfs/${parsedMetadata.imageHash}`
-                            : parsedMetadata.image || ""
-                        };
-                        console.log("从事件日志获取到创建拍卖的元数据:", metadata);
-                      } catch (e) {
-                        console.error("解析创建拍卖元数据字符串失败:", e);
+                  try {
+                    // 获取当前区块高度
+                    const currentBlock = await publicClient.getBlockNumber();
+
+                    // 设置合理的搜索范围（最近10000个区块）
+                    const searchFromBlock = currentBlock > 10000n ? currentBlock - 10000n : 0n;
+
+                    // 使用合理的区块范围查询事件
+                    const logs = await publicClient.getContractEvents({
+                      address: factoryContractData.address,
+                      abi: factoryContractData.abi,
+                      eventName: 'AuctionCreated',
+                      args: {
+                        auctionAddress: auctionAddress as `0x${string}`
+                      },
+                      fromBlock: searchFromBlock,
+                      toBlock: currentBlock,
+                    });
+
+                    if (logs && logs.length > 0 && logs[0].args) {
+                      const metadataStr = logs[0].args.metadata as string;
+                      if (metadataStr) {
+                        try {
+                          const parsedMetadata = JSON.parse(metadataStr);
+                          metadata = {
+                            ...parsedMetadata,
+                            // 确保图片URL正确格式化
+                            image: parsedMetadata.imageHash
+                              ? `https://ipfs.io/ipfs/${parsedMetadata.imageHash}`
+                              : parsedMetadata.image || ""
+                          };
+                          console.log("从事件日志获取到创建拍卖的元数据:", metadata);
+                        } catch (e) {
+                          console.error("解析创建拍卖元数据字符串失败:", e);
+                        }
                       }
+                    } else {
+                      console.log("在指定区块范围内未找到拍卖创建事件，可能拍卖创建时间较早");
                     }
+                  } catch (eventError) {
+                    console.error("从事件日志获取创建拍卖元数据失败:", eventError);
+                    console.log("将使用默认元数据");
                   }
                 }
               } catch (error) {
@@ -460,33 +506,49 @@ const MyAssets = () => {
                     // 如果从NFT合约获取失败或不是NFT拍卖，尝试从事件日志获取
                     if (!metadata.image && factoryContractData) {
                       console.log("尝试从事件日志获取参与拍卖的元数据...");
-                      const logs = await publicClient.getContractEvents({
-                        address: factoryContractData.address,
-                        abi: factoryContractData.abi,
-                        eventName: 'AuctionCreated',
-                        args: {
-                          auctionAddress: auctionAddress as `0x${string}`
-                        },
-                        fromBlock: BigInt(0),
-                      });
 
-                      if (logs && logs.length > 0 && logs[0].args) {
-                        const metadataStr = logs[0].args.metadata as string;
-                        if (metadataStr) {
-                          try {
-                            const parsedMetadata = JSON.parse(metadataStr);
-                            metadata = {
-                              ...parsedMetadata,
-                              // 确保图片URL正确格式化
-                              image: parsedMetadata.imageHash
-                                ? `https://ipfs.io/ipfs/${parsedMetadata.imageHash}`
-                                : parsedMetadata.image || ""
-                            };
-                            console.log("从事件日志获取到参与拍卖的元数据:", metadata);
-                          } catch (e) {
-                            console.error("解析参与拍卖元数据字符串失败:", e);
+                      try {
+                        // 获取当前区块高度
+                        const currentBlock = await publicClient.getBlockNumber();
+
+                        // 设置合理的搜索范围（最近10000个区块）
+                        const searchFromBlock = currentBlock > 10000n ? currentBlock - 10000n : 0n;
+
+                        // 使用合理的区块范围查询事件
+                        const logs = await publicClient.getContractEvents({
+                          address: factoryContractData.address,
+                          abi: factoryContractData.abi,
+                          eventName: 'AuctionCreated',
+                          args: {
+                            auctionAddress: auctionAddress as `0x${string}`
+                          },
+                          fromBlock: searchFromBlock,
+                          toBlock: currentBlock,
+                        });
+
+                        if (logs && logs.length > 0 && logs[0].args) {
+                          const metadataStr = logs[0].args.metadata as string;
+                          if (metadataStr) {
+                            try {
+                              const parsedMetadata = JSON.parse(metadataStr);
+                              metadata = {
+                                ...parsedMetadata,
+                                // 确保图片URL正确格式化
+                                image: parsedMetadata.imageHash
+                                  ? `https://ipfs.io/ipfs/${parsedMetadata.imageHash}`
+                                  : parsedMetadata.image || ""
+                              };
+                              console.log("从事件日志获取到参与拍卖的元数据:", metadata);
+                            } catch (e) {
+                              console.error("解析参与拍卖元数据字符串失败:", e);
+                            }
                           }
+                        } else {
+                          console.log("在指定区块范围内未找到拍卖创建事件，可能拍卖创建时间较早");
                         }
+                      } catch (eventError) {
+                        console.error("从事件日志获取参与拍卖元数据失败:", eventError);
+                        console.log("将使用默认元数据");
                       }
                     }
                   } catch (error) {
@@ -918,25 +980,50 @@ const MyAssets = () => {
 
   // 修改显示拍卖状态的函数
   const getAuctionTimeDisplay = (auction: AuctionData) => {
+    const now = Math.floor(Date.now() / 1000);
+
     if (auction.state === "ended") {
       return formatEndTime(auction.revealEnd);
     } else if (auction.state === "revealing") {
-      const timeLeft = Number(auction.revealEnd) - Math.floor(Date.now() / 1000);
+      const timeLeft = Number(auction.revealEnd) - now;
       if (timeLeft > 0) {
-        return formatTimeLeft(timeLeft);
+        return formatTimeRemaining(timeLeft);
       } else {
         return formatEndTime(auction.revealEnd);
       }
     } else if (auction.state === "bidding") {
-      const timeLeft = Number(auction.biddingEnd) - Math.floor(Date.now() / 1000);
+      const timeLeft = Number(auction.biddingEnd) - now;
       if (timeLeft > 0) {
-        return formatTimeLeft(timeLeft);
+        return formatTimeRemaining(timeLeft);
       } else {
         return formatEndTime(auction.biddingEnd);
+      }
+    } else if (auction.state === "pending") {
+      const timeLeft = Number(auction.biddingStart || 0) - now;
+      if (timeLeft > 0) {
+        return formatTimeRemaining(timeLeft);
+      } else {
+        return formatEndTime(auction.biddingStart || BigInt(0));
       }
     } else {
       return formatEndTime(auction.biddingStart || BigInt(0));
     }
+  };
+
+  // 添加一个新的格式化剩余时间的函数
+  const formatTimeRemaining = (seconds: number): string => {
+    if (seconds <= 0) return "即将结束";
+
+    const days = Math.floor(seconds / (24 * 60 * 60));
+    const hours = Math.floor((seconds % (24 * 60 * 60)) / (60 * 60));
+    const minutes = Math.floor((seconds % (60 * 60)) / 60);
+
+    let result = "";
+    if (days > 0) result += `${days}天`;
+    if (hours > 0) result += `${hours}小时`;
+    if (minutes > 0) result += `${minutes}分钟`;
+
+    return result || "1分钟内";
   };
 
   return (
@@ -1389,102 +1476,115 @@ const MyAssets = () => {
                     <div className="p-6">
                       {participatedAuctions.length > 0 ? (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                          {participatedAuctions.map((auction, index) => (
-                            <div key={index} className="bg-slate-800/50 rounded-xl border border-slate-700/60 shadow-md hover:shadow-purple-500/10 transition-all overflow-hidden hover:-translate-y-1 hover:border-purple-500/50 group relative">
-                              {/* 卡片内光效 */}
-                              <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500">
-                                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-purple-500/30 to-transparent"></div>
-                                <div className="absolute top-0 right-0 w-1 h-full bg-gradient-to-b from-purple-500/30 via-transparent to-transparent"></div>
-                              </div>
+                          {participatedAuctions
+                            .sort((a, b) => {
+                              // 首先按状态排序：bidding > pending > revealing > ended
+                              const stateOrder = { 'bidding': 1, 'pending': 2, 'revealing': 3, 'ended': 4 };
+                              const stateComparison = stateOrder[a.state] - stateOrder[b.state];
 
-                              <div className="relative h-40 bg-slate-700/50 overflow-hidden">
-                                {auction.metadata.image ? (
-                                  <OptimizedImage
-                                    src={auction.metadata.image}
-                                    alt={auction.metadata.name}
-                                    className="w-full h-full transform group-hover:scale-105 transition-transform duration-500"
-                                    quality={85}
-                                    objectFit="cover"
-                                    rounded="rounded-none"
-                                    onLoad={() => {
-                                      console.log(`参与的拍卖 ${auction.address} 图片加载成功`);
-                                    }}
-                                    onError={(error) => {
-                                      console.error(`参与的拍卖 ${auction.address} 图片加载失败:`, error);
-                                    }}
-                                  />
-                                ) : (
-                                  <div className="flex items-center justify-center h-full text-slate-400 bg-gradient-to-br from-slate-800 to-slate-900">
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                    </svg>
-                                  </div>
-                                )}
-                                <div className={`absolute top-2 right-2 px-2 py-1 rounded-md text-xs font-semibold ${getStatusClass(auction.state)}`}>
-                                  {getStatusText(auction.state)}
+                              if (stateComparison !== 0) {
+                                return stateComparison;
+                              }
+
+                              // 同状态内按结束时间排序（最新的在前）
+                              return Number(b.biddingEnd) - Number(a.biddingEnd);
+                            })
+                            .map((auction, index) => (
+                              <div key={index} className="bg-slate-800/50 rounded-xl border border-slate-700/60 shadow-md hover:shadow-purple-500/10 transition-all overflow-hidden hover:-translate-y-1 hover:border-purple-500/50 group relative">
+                                {/* 卡片内光效 */}
+                                <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500">
+                                  <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-purple-500/30 to-transparent"></div>
+                                  <div className="absolute top-0 right-0 w-1 h-full bg-gradient-to-b from-purple-500/30 via-transparent to-transparent"></div>
                                 </div>
-                              </div>
-                              <div className="p-4">
-                                <h3 className="text-lg font-semibold text-white mb-2 truncate group-hover:text-purple-400 transition-colors">
-                                  {auction.metadata.name || "未命名拍卖"}
-                                </h3>
-                                <p className="text-slate-400 text-sm mb-3 line-clamp-2 h-10">
-                                  {auction.metadata.description || "无描述"}
-                                </p>
-                                <div className="flex items-center justify-between text-sm">
-                                  <span className="text-slate-300">起拍价:</span>
-                                  <span className="text-green-400 font-medium">
-                                    {typeof auction.metadata.minPrice === 'string' && auction.metadata.minPrice.includes('.')
-                                      ? `${auction.metadata.minPrice} ETH`
-                                      : `${formatEther(BigInt(auction.metadata.minPrice))} ETH`}
-                                  </span>
-                                </div>
-                                <div className="flex justify-between items-center text-sm">
-                                  <span className="text-slate-400">结束时间:</span>
-                                  <span className={`${auction.state === "ended" ? "text-slate-400" : "text-blue-400"}`}>
-                                    {getAuctionTimeDisplay(auction)}
-                                  </span>
-                                </div>
-                                <div className="mt-4 pt-3 border-t border-slate-700/50 flex justify-between items-center">
-                                  <Link
-                                    href={`/auction/${auction.address}`}
-                                    className="text-purple-400 hover:text-purple-300 text-sm flex items-center group-hover:translate-x-1 transition-transform"
-                                  >
-                                    查看详情
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                    </svg>
-                                  </Link>
-                                  <div className="flex gap-2">
-                                    {auction.state === "bidding" && (
-                                      <Link
-                                        href={`/bid?address=${auction.address}`}
-                                        className="btn btn-xs bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 border-0 text-xs text-white shadow-md"
-                                      >
-                                        出价
-                                      </Link>
-                                    )}
-                                    {auction.state === "revealing" && (
-                                      <Link
-                                        href={`/reveal?address=${auction.address}`}
-                                        className="btn btn-xs bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 border-0 text-xs text-white shadow-md"
-                                      >
-                                        揭示
-                                      </Link>
-                                    )}
-                                    {auction.state === "ended" && (
-                                      <Link
-                                        href={`/results?address=${auction.address}`}
-                                        className="btn btn-xs bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 border-0 text-xs text-white shadow-md"
-                                      >
-                                        结果
-                                      </Link>
-                                    )}
+
+                                <div className="relative h-40 bg-slate-700/50 overflow-hidden">
+                                  {auction.metadata.image ? (
+                                    <OptimizedImage
+                                      src={auction.metadata.image}
+                                      alt={auction.metadata.name}
+                                      className="w-full h-full transform group-hover:scale-105 transition-transform duration-500"
+                                      quality={85}
+                                      objectFit="cover"
+                                      rounded="rounded-none"
+                                      onLoad={() => {
+                                        console.log(`参与的拍卖 ${auction.address} 图片加载成功`);
+                                      }}
+                                      onError={(error) => {
+                                        console.error(`参与的拍卖 ${auction.address} 图片加载失败:`, error);
+                                      }}
+                                    />
+                                  ) : (
+                                    <div className="flex items-center justify-center h-full text-slate-400 bg-gradient-to-br from-slate-800 to-slate-900">
+                                      <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                      </svg>
+                                    </div>
+                                  )}
+                                  <div className={`absolute top-2 right-2 px-2 py-1 rounded-md text-xs font-semibold ${getStatusClass(auction.state)}`}>
+                                    {getStatusText(auction.state)}
                                   </div>
                                 </div>
+                                <div className="p-4">
+                                  <h3 className="text-lg font-semibold text-white mb-2 truncate group-hover:text-purple-400 transition-colors">
+                                    {auction.metadata.name || "未命名拍卖"}
+                                  </h3>
+                                  <p className="text-slate-400 text-sm mb-3 line-clamp-2 h-10">
+                                    {auction.metadata.description || "无描述"}
+                                  </p>
+                                  <div className="flex items-center justify-between text-sm">
+                                    <span className="text-slate-300">起拍价:</span>
+                                    <span className="text-green-400 font-medium">
+                                      {typeof auction.metadata.minPrice === 'string' && auction.metadata.minPrice.includes('.')
+                                        ? `${auction.metadata.minPrice} ETH`
+                                        : `${formatEther(BigInt(auction.metadata.minPrice))} ETH`}
+                                    </span>
+                                  </div>
+                                  <div className="flex justify-between items-center text-sm">
+                                    <span className="text-slate-400">结束时间:</span>
+                                    <span className={`${auction.state === "ended" ? "text-slate-400" : "text-blue-400"}`}>
+                                      {getAuctionTimeDisplay(auction)}
+                                    </span>
+                                  </div>
+                                  <div className="mt-4 pt-3 border-t border-slate-700/50 flex justify-between items-center">
+                                    <Link
+                                      href={`/auction/${auction.address}`}
+                                      className="text-purple-400 hover:text-purple-300 text-sm flex items-center group-hover:translate-x-1 transition-transform"
+                                    >
+                                      查看详情
+                                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                      </svg>
+                                    </Link>
+                                    <div className="flex gap-2">
+                                      {auction.state === "bidding" && (
+                                        <Link
+                                          href={`/bid?address=${auction.address}`}
+                                          className="btn btn-xs bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 border-0 text-xs text-white shadow-md"
+                                        >
+                                          出价
+                                        </Link>
+                                      )}
+                                      {auction.state === "revealing" && (
+                                        <Link
+                                          href={`/reveal?address=${auction.address}`}
+                                          className="btn btn-xs bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 border-0 text-xs text-white shadow-md"
+                                        >
+                                          揭示
+                                        </Link>
+                                      )}
+                                      {auction.state === "ended" && (
+                                        <Link
+                                          href={`/results?address=${auction.address}`}
+                                          className="btn btn-xs bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 border-0 text-xs text-white shadow-md"
+                                        >
+                                          结果
+                                        </Link>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            ))}
                         </div>
                       ) : isLoading ? (
                         <div className="flex flex-col justify-center items-center py-16">
