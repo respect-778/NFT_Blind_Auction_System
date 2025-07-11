@@ -744,9 +744,50 @@ const AllAuctions = () => {
                         <div className="flex justify-between items-center text-sm">
                           <span className="text-purple-400">最低出价</span>
                           <span className="text-white font-semibold">
-                            {typeof auction.metadata.minPrice === 'string' && auction.metadata.minPrice.includes('.')
-                              ? `${auction.metadata.minPrice} ETH`
-                              : `${formatEther(BigInt(auction.metadata.minPrice || '0'))} ETH`}
+                            {(() => {
+                              const minPrice = auction.metadata.minPrice;
+
+                              // 处理空值或无效值
+                              if (!minPrice || minPrice === '0' || minPrice === '') {
+                                return '0 ETH';
+                              }
+
+                              // 如果是字符串且包含小数点，说明已经是ETH单位，直接使用
+                              if (typeof minPrice === 'string' && minPrice.includes('.')) {
+                                return `${minPrice} ETH`;
+                              }
+
+                              try {
+                                // 检查是否是整数形式的ETH值（比如"1"表示1 ETH）
+                                const numValue = Number(minPrice);
+                                if (!isNaN(numValue) && numValue >= 1) {
+                                  return `${numValue} ETH`;
+                                }
+
+                                // 如果不是，则视为Wei值
+                                const priceInWei = BigInt(minPrice);
+
+                                // 检查是否为0
+                                if (priceInWei === 0n) {
+                                  return '0 ETH';
+                                }
+
+                                // 使用formatEther转换为ETH
+                                const formattedPrice = formatEther(priceInWei);
+
+                                // 转换为数字并格式化
+                                const price = Number(formattedPrice);
+                                const finalPrice = price.toLocaleString('en-US', {
+                                  minimumFractionDigits: 0,
+                                  maximumFractionDigits: 3,
+                                  useGrouping: false
+                                });
+
+                                return `${finalPrice} ETH`;
+                              } catch (e) {
+                                return '0 ETH';
+                              }
+                            })() as string}
                           </span>
                         </div>
 
@@ -988,9 +1029,50 @@ const AllAuctions = () => {
                       <div className="bg-purple-800/30 rounded-lg p-3 backdrop-blur-sm border border-purple-700/50">
                         <h3 className="text-xs text-purple-300 font-medium mb-1">最低出价</h3>
                         <p className="text-white font-medium">
-                          {typeof previewAuction.metadata.minPrice === 'string' && previewAuction.metadata.minPrice.includes('.')
-                            ? `${previewAuction.metadata.minPrice} ETH`
-                            : `${formatEther(BigInt(previewAuction.metadata.minPrice || '0'))} ETH`}
+                          {(() => {
+                            const minPrice = previewAuction.metadata.minPrice;
+
+                            // 处理空值或无效值
+                            if (!minPrice || minPrice === '0' || minPrice === '') {
+                              return '0 ETH';
+                            }
+
+                            // 如果是字符串且包含小数点，说明已经是ETH单位，直接使用
+                            if (typeof minPrice === 'string' && minPrice.includes('.')) {
+                              return `${minPrice} ETH`;
+                            }
+
+                            try {
+                              // 检查是否是整数形式的ETH值（比如"1"表示1 ETH）
+                              const numValue = Number(minPrice);
+                              if (!isNaN(numValue) && numValue >= 1) {
+                                return `${numValue} ETH`;
+                              }
+
+                              // 如果不是，则视为Wei值
+                              const priceInWei = BigInt(minPrice);
+
+                              // 检查是否为0
+                              if (priceInWei === 0n) {
+                                return '0 ETH';
+                              }
+
+                              // 使用formatEther转换为ETH
+                              const formattedPrice = formatEther(priceInWei);
+
+                              // 转换为数字并格式化
+                              const price = Number(formattedPrice);
+                              const finalPrice = price.toLocaleString('en-US', {
+                                minimumFractionDigits: 0,
+                                maximumFractionDigits: 3,
+                                useGrouping: false
+                              });
+
+                              return `${finalPrice} ETH`;
+                            } catch (e) {
+                              return '0 ETH';
+                            }
+                          })() as string}
                         </p>
                       </div>
 

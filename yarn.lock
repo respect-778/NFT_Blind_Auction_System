@@ -2664,6 +2664,7 @@ __metadata:
     "@heroicons/react": ^2.0.11
     "@rainbow-me/rainbowkit": ^2.0.2
     "@tanstack/react-query": ^5.28.6
+    "@tanstack/react-virtual": ^3.13.12
     "@trivago/prettier-plugin-sort-imports": ^4.1.1
     "@types/humanize-duration": ^3
     "@types/node": ^17.0.35
@@ -3017,6 +3018,25 @@ __metadata:
   peerDependencies:
     react: ^18.0.0
   checksum: 56480912ba9aeaf700468ae1e0b60abadbae3621290d5c094e568cf2aa7a6327ae5d75547f455ddd9b74684a53800b37a042dacfb8de68ddce4e33f5550510b6
+  languageName: node
+  linkType: hard
+
+"@tanstack/react-virtual@npm:^3.13.12":
+  version: 3.13.12
+  resolution: "@tanstack/react-virtual@npm:3.13.12"
+  dependencies:
+    "@tanstack/virtual-core": 3.13.12
+  peerDependencies:
+    react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+  checksum: 7b64c728ae3666c22f6a1727d464f877c04ae02347480eab482c7a002c2a340167ded856e3dd52b19de34f965aeb01a1e223acdab44d646251c0aa89c3d69539
+  languageName: node
+  linkType: hard
+
+"@tanstack/virtual-core@npm:3.13.12":
+  version: 3.13.12
+  resolution: "@tanstack/virtual-core@npm:3.13.12"
+  checksum: bef2c3138543a2088fff7d4fa46624d07403b18d92ec5a7271e187457851535031a79bc78ac655355a221d5549ef3b5674a3b249d2531f4c17c93107498c8438
   languageName: node
   linkType: hard
 
