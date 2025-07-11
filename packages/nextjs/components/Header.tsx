@@ -203,7 +203,7 @@ export const Header = () => {
           <HeaderMenuLinks />
         </ul>
       </div>
-      <div className="navbar-end flex items-center gap-3 mr-4">
+      <div className="navbar-end flex-grow mr-4">
         {/* NFT计数器 */}
         <div className="flex items-center gap-1 px-3 py-1 bg-slate-800/30 rounded-lg border border-slate-600/30 backdrop-blur-sm">
           <SparklesIcon className="h-4 w-4 text-purple-400" />
@@ -212,7 +212,6 @@ export const Header = () => {
         </div>
 
         <RainbowKitCustomConnectButton />
-        <FaucetButton />
       </div>
     </div>
   );
