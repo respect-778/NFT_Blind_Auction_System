@@ -211,17 +211,39 @@ const AuctionDetail = () => {
               const metadataStr = logs[0].args.metadata as string;
               if (metadataStr) {
                 const parsedMetadata = JSON.parse(metadataStr);
-                // 只有在NFT数据不可用时才使用事件日志数据
-                if (!metadata.image) {
+                // 处理价格显示
+                let minPrice = parsedMetadata.minPrice;
+                if (minPrice) {
+                  // 如果是字符串且包含小数点，直接使用
+                  if (typeof minPrice === 'string' && minPrice.includes('.')) {
+                    // 保持原样
+                  } else {
+                    // 检查是否是整数形式的ETH值
+                    const numValue = Number(minPrice);
+                    if (!isNaN(numValue) && numValue >= 1) {
+                      minPrice = numValue.toString();
+                    } else {
+                      // 否则将其视为Wei值并转换
+                      try {
+                        const priceInWei = BigInt(minPrice);
+                        const formattedPrice = formatEther(priceInWei);
+                        minPrice = parseFloat(formattedPrice).toString();
+                      } catch (e) {
+                        minPrice = "0";
+                      }
+                    }
+                  }
+                }
+
                   metadata = {
                     ...parsedMetadata,
+                  minPrice: minPrice || "0",
                     // 确保图片URL正确格式化
                     image: parsedMetadata.imageHash
                       ? `https://ipfs.io/ipfs/${parsedMetadata.imageHash}`
                       : parsedMetadata.image || ""
                   };
                   console.log("从事件日志获取到元数据:", metadata);
-                }
               }
             }
           }
@@ -360,9 +382,15 @@ const AuctionDetail = () => {
     if (typeof minPriceValue === 'string' && minPriceValue.includes('.')) {
       minPriceEth = minPriceValue;
     } else {
+      // 检查是否是整数形式的ETH值
+      const numValue = Number(minPriceValue);
+      if (!isNaN(numValue) && numValue >= 1) {
+        minPriceEth = numValue.toString();
+    } else {
       // 否则从wei转换为ETH
       const priceWei = BigInt(minPriceValue || '0');
       minPriceEth = formatEther(priceWei);
+      }
     }
   } catch (error) {
     console.error("转换最低价格失败:", error);

@@ -449,21 +449,6 @@ export default function MintNFT() {
               <p className="mt-4 text-slate-300/80 text-base max-w-2xl mx-auto leading-relaxed">
                 创建独一无二的NFT数字艺术品，铸造完成后可选择在市场中拍卖
               </p>
-
-              {/* IPFS配置状态显示 */}
-              <div className="mt-6 flex justify-center">
-                <div className="bg-slate-800/50 backdrop-blur-sm rounded-lg px-4 py-2 border border-slate-600/50">
-                  <div className="flex items-center text-sm">
-                    <div className="flex items-center text-green-400 mr-4">
-                      <div className="w-2 h-2 bg-green-400 rounded-full mr-2 animate-pulse"></div>
-                      IPFS: 已配置新密钥
-                    </div>
-                    <div className="text-slate-400">
-                      API Key: {PINATA_API_KEY.slice(0, 8)}...{PINATA_API_KEY.slice(-4)}
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
 
             {/* 主要内容区域 - 左右分栏布局：左侧上传和表单，右侧预览 */}
